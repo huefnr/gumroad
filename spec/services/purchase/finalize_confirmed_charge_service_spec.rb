@@ -307,6 +307,81 @@ describe Purchase::FinalizeConfirmedChargeService do
       end
     end
 
+    context "when a South Korean charge succeeds" do
+      let(:merchant_account) { create(:merchant_account, user: nil) }
+      let(:purchase) do
+        create(:purchase_in_progress, merchant_account:, stripe_transaction_id: nil,
+                                      flow_of_funds: nil, card_type: nil, card_visual: nil, succeeded_at: nil)
+      end
+      CardType::SOUTH_KOREAN_METHOD_LABELS.each_key do |method|
+        it "fulfills #{method} once and records the method, with a retry changing nothing" do
+          processor_charge = StripeCharge.new(Stripe::Charge.construct_from(
+            id: "ch_korea", status: "succeeded", created: 2.days.ago.to_i, refunded: false,
+            currency: Currency::KRW, amount: 1_375, amount_refunded: 0,
+            payment_method: "pm_korea", payment_method_details: { type: method, method => {} },
+            outcome: { risk_level: "normal" }
+          ), nil, nil, nil, nil)
+          processor_charge.flow_of_funds = FlowOfFunds.build_simple_flow_of_funds(Currency::KRW, 1_375)
+          create(:purchase_presentment, purchase:, presentment_currency: Currency::KRW,
+                                        presentment_total_cents: 1_375, presentment_price_cents: 1_375,
+                                        presentment_gumroad_tax_cents: 0, charge_presentment: nil)
+          intent = instance_double(StripeChargeIntent, succeeded?: true, charge: processor_charge)
+          expect(ErrorNotifier).not_to receive(:notify)
+
+          expect do
+            expect(described_class.new(purchase:, charge_intent: intent).perform).to be_nil
+          end.to change { ActivateIntegrationsWorker.jobs.size }.by(1)
+          expect(purchase.reload).to be_successful
+          expect(purchase.card_type).to eq(method)
+          expect(purchase.card_visual).to be_nil
+          expect(purchase.stripe_transaction_id).to eq("ch_korea")
+          succeeded_at = purchase.succeeded_at
+
+          expect do
+            expect(described_class.new(purchase:, charge_intent: intent).perform).to be_nil
+          end.not_to change { ActivateIntegrationsWorker.jobs.size }
+          expect(purchase.reload.succeeded_at).to eq(succeeded_at)
+        end
+      end
+    end
+
+    context "when a Naver Pay attempt fails before a successful retry" do
+      let(:merchant_account) { create(:merchant_account, user: nil) }
+      let(:purchase) { create(:purchase_in_progress, merchant_account:, stripe_transaction_id: nil, flow_of_funds: nil, succeeded_at: nil) }
+
+      it "does not fulfill the failed attempt and recovers the same funded intent exactly once" do
+        charge = create(:charge, seller: purchase.seller, merchant_account:,
+                                 amount_cents: purchase.total_transaction_cents, stripe_payment_intent_id: "pi_naver_retry")
+        charge.purchases << purchase
+        presentment = create(:charge_presentment, charge:, presentment_currency: Currency::KRW, presentment_total_cents: 1_375)
+        create(:purchase_presentment, purchase:, charge_presentment: presentment, presentment_currency: Currency::KRW,
+                                      presentment_total_cents: 1_375, presentment_price_cents: 1_375, presentment_gumroad_tax_cents: 0)
+        failed_intent = StripeChargeIntent.new(payment_intent: Stripe::PaymentIntent.construct_from(
+          id: "pi_naver_retry", status: "requires_payment_method", payment_method_types: ["naver_pay"]
+        ))
+        expect do
+          expect(described_class.new(purchase:, charge_intent: failed_intent).perform).to eq("Sorry, something went wrong.")
+        end.not_to change { ActivateIntegrationsWorker.jobs.size }
+        expect(purchase.reload).to be_failed
+
+        processor_charge = StripeCharge.new(Stripe::Charge.construct_from(
+          id: "ch_naver_retry", status: "succeeded", created: Time.current.to_i, refunded: false, disputed: false,
+          currency: Currency::KRW, amount: 1_375, amount_refunded: 0,
+          payment_method: "pm_naver", payment_method_details: { type: "naver_pay", naver_pay: {} },
+          outcome: { risk_level: "normal" }
+        ), nil, nil, nil, nil)
+        processor_charge.flow_of_funds = FlowOfFunds.build_simple_flow_of_funds(Currency::KRW, 1_375)
+        succeeded_intent = instance_double(StripeChargeIntent, id: "pi_naver_retry", succeeded?: true, charge: processor_charge)
+        expect(ErrorNotifier).not_to receive(:notify)
+        expect do
+          expect(described_class.new(purchase:, charge_intent: succeeded_intent).perform).to be_nil
+          expect(described_class.new(purchase:, charge_intent: succeeded_intent).perform).to be_nil
+        end.to change { ActivateIntegrationsWorker.jobs.size }.by(1)
+        expect(purchase.reload).to be_successful
+        expect(purchase.card_type).to eq(CardType::NAVER_PAY)
+      end
+    end
+
     context "when the purchase is already successful" do
       let(:purchase) { create(:purchase_in_progress).tap { _1.update_column(:purchase_state, "successful") } }
 

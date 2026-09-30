@@ -118,6 +118,7 @@ export type Customer = {
   partially_refunded: boolean;
   chargedback: boolean;
   paypal_refund_expired: boolean;
+  refund_unavailable_reason: string | null;
   has_options: boolean;
   option: Option | null;
   utm_link: {
@@ -378,6 +379,7 @@ export type Charge = {
   is_upgrade_purchase: boolean;
   chargedback: boolean;
   paypal_refund_expired: boolean;
+  refund_unavailable_reason: string | null;
 };
 
 export const getCharges = (purchaseId: string, purchaseEmail: string) =>

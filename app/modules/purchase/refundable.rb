@@ -2,6 +2,27 @@
 
 class Purchase
   module Refundable
+    # Stripe stops refunding the South Korean methods 365 calendar days after the charge
+    # (https://docs.stripe.com/payments/countries/korea#refunds); past that it rejects the request
+    # and the generic retry advice would be wrong. The purchase row is created at the same checkout
+    # as the charge, so its created_at is the charge date, give or take the redirect.
+    SOUTH_KOREAN_REFUND_WINDOW = 365.days
+    SOUTH_KOREAN_REFUND_EXPIRED_ERROR_MESSAGE = "Refunds for South Korean payment methods aren't available after 365 days."
+
+    def south_korean_refund_expired?
+      return false unless stripe_charge_processor? && CardType::SOUTH_KOREAN_METHOD_LABELS.key?(card_type)
+
+      created_at.present? && created_at + SOUTH_KOREAN_REFUND_WINDOW <= Time.current
+    end
+
+    def refund_unavailable_reason
+      if paypal_refund_expired?
+        "PayPal refunds aren't available after 6 months."
+      elsif south_korean_refund_expired?
+        SOUTH_KOREAN_REFUND_EXPIRED_ERROR_MESSAGE
+      end
+    end
+
     ACTIVE_DISPUTE_REFUND_ERROR_MESSAGE = "This purchase has an active dispute. " \
                                           "The funds have already been returned to the buyer. " \
                                           "No additional refund is needed."
@@ -53,6 +74,11 @@ class Purchase
         # that only read errors.full_messages never show a blank failure toast.
         errors.add :base, NOTHING_TO_REFUND_ERROR_MESSAGE
         return
+      end
+
+      if south_korean_refund_expired?
+        errors.add :base, SOUTH_KOREAN_REFUND_EXPIRED_ERROR_MESSAGE
+        return false
       end
 
       if chargedback_not_reversed?
@@ -445,6 +471,11 @@ class Purchase
       # which this outcome is expected and non-blocking (invoice generation after
       # the VAT was already refunded) filter this specific message out.
       errors.add :base, NO_TAX_TO_REFUND_ERROR_MESSAGE
+      return false
+    end
+
+    if south_korean_refund_expired?
+      errors.add :base, SOUTH_KOREAN_REFUND_EXPIRED_ERROR_MESSAGE
       return false
     end
 

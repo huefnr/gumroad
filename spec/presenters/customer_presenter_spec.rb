@@ -143,6 +143,7 @@ describe CustomerPresenter do
           refunded: true,
           partially_refunded: true,
           paypal_refund_expired: false,
+          refund_unavailable_reason: nil,
           chargedback: false,
           has_options: true,
           option: purchase1.variant_attributes.first.to_option,
@@ -215,6 +216,7 @@ describe CustomerPresenter do
           refunded: false,
           partially_refunded: false,
           paypal_refund_expired: true,
+          refund_unavailable_reason: "PayPal refunds aren't available after 6 months.",
           chargedback: true,
           has_options: true,
           option: purchase2.variant_attributes.first.to_option,
@@ -648,6 +650,7 @@ describe CustomerPresenter do
           refunded: false,
           transaction_url_for_seller: nil,
           paypal_refund_expired: true,
+          refund_unavailable_reason: "PayPal refunds aren't available after 6 months.",
         }
       )
     end

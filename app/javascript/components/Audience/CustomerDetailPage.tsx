@@ -693,7 +693,7 @@ const CustomerDetailPage = ({
                     currencyType={customer.price.currency_type}
                     amountRefundable={customer.price.cents_refundable}
                     showRefundFeeNotice={showRefundFeeNotice}
-                    paypalRefundExpired={customer.paypal_refund_expired}
+                    refundUnavailableReason={customer.refund_unavailable_reason}
                     modalTitle="Purchase refund"
                     modalText="Would you like to confirm this purchase refund?"
                     onChange={(amountRefundable) =>
@@ -1844,7 +1844,7 @@ const RefundForm = ({
   currencyType,
   amountRefundable,
   showRefundFeeNotice,
-  paypalRefundExpired,
+  refundUnavailableReason,
   modalTitle,
   modalText,
   onChange,
@@ -1855,7 +1855,7 @@ const RefundForm = ({
   currencyType: CurrencyCode;
   amountRefundable: number;
   showRefundFeeNotice: boolean;
-  paypalRefundExpired: boolean;
+  refundUnavailableReason: string | null;
   modalTitle: string;
   modalText: string;
   onChange: (amountRefundable: number) => void;
@@ -1895,7 +1895,7 @@ const RefundForm = ({
     <Button
       color="primary"
       onClick={() => setIsModalShowing(true)}
-      disabled={isLoading || paypalRefundExpired}
+      disabled={isLoading || !!refundUnavailableReason}
       className="w-full"
     >
       {isLoading ? "Refunding..." : isPartialRefund ? "Issue partial refund" : "Refund fully"}
@@ -1919,8 +1919,8 @@ const RefundForm = ({
             </Button>
           ) : null}
           <div className="flex-1">
-            {paypalRefundExpired ? (
-              <WithTooltip tip="PayPal refunds aren't available after 6 months." position="top">
+            {refundUnavailableReason ? (
+              <WithTooltip tip={refundUnavailableReason} position="top">
                 {refundButton}
               </WithTooltip>
             ) : (
@@ -2030,7 +2030,7 @@ const ChargeRow = ({
             currencyType={purchase.currency_type}
             amountRefundable={purchase.amount_refundable}
             showRefundFeeNotice={showRefundFeeNotice}
-            paypalRefundExpired={purchase.paypal_refund_expired}
+            refundUnavailableReason={purchase.refund_unavailable_reason}
             modalTitle="Charge refund"
             modalText="Would you like to confirm this charge refund?"
             onChange={(amountRefundable) => {
