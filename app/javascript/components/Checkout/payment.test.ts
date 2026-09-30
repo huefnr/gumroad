@@ -22,6 +22,7 @@ import {
   getStripePaymentElementPresentment,
   isCardReadyToPay,
   isSubmitDisabled,
+  paymentMethodOrderForMountCurrency,
   paymentMethodTypesForMountCurrency,
   reduceCheckoutState,
   requiresPaymentElementReusablePaymentMethod,
@@ -3846,6 +3847,67 @@ describe("paymentMethodTypesForMountCurrency", () => {
 
     expect(paymentMethodTypesForMountCurrency(usdMount, "usd")).toEqual(["card", "link", "cashapp"]);
     expect(paymentMethodTypesForMountCurrency(usdMount, "inr")).toEqual(["card", "link", "upi"]);
+  });
+
+  it("adds the South Korean methods only after a KRW remount and drops Cash App", () => {
+    const usdMount = {
+      payment_method_types: ["card", "link", "cashapp"],
+      inr_local_methods: ["upi"],
+      krw_local_methods: ["kr_card", "kakao_pay", "naver_pay", "samsung_pay", "payco"],
+    };
+
+    expect(paymentMethodTypesForMountCurrency(usdMount, "usd")).toEqual(["card", "link", "cashapp"]);
+    expect(paymentMethodTypesForMountCurrency(usdMount, "krw")).toEqual([
+      "card",
+      "link",
+      "kr_card",
+      "kakao_pay",
+      "naver_pay",
+      "samsung_pay",
+      "payco",
+    ]);
+    expect(paymentMethodTypesForMountCurrency(usdMount, "KRW")).toContain("kakao_pay");
+  });
+
+  it("keeps each remount's local methods off the other's mount", () => {
+    const usdMount = {
+      payment_method_types: ["card", "link"],
+      inr_local_methods: ["upi"],
+      krw_local_methods: ["kakao_pay"],
+    };
+
+    expect(paymentMethodTypesForMountCurrency(usdMount, "inr")).toEqual(["card", "link", "upi"]);
+    expect(paymentMethodTypesForMountCurrency(usdMount, "krw")).toEqual(["card", "link", "kakao_pay"]);
+    expect(paymentMethodTypesForMountCurrency(usdMount, "jpy")).toEqual(["card", "link"]);
+  });
+
+  it("drops a South Korean method the server listed on a mount that is not KRW", () => {
+    const listed = { payment_method_types: ["card", "link", "kakao_pay"] };
+
+    expect(paymentMethodTypesForMountCurrency(listed, "usd")).toEqual(["card", "link"]);
+    expect(paymentMethodTypesForMountCurrency(listed, "krw")).toEqual(["card", "link", "kakao_pay"]);
+  });
+
+  it("adds nothing on a KRW remount when the server sent no South Korean methods", () => {
+    const usdMount = { payment_method_types: ["card", "link"], inr_local_methods: ["upi"] };
+
+    expect(paymentMethodTypesForMountCurrency(usdMount, "krw")).toEqual(["card", "link"]);
+  });
+});
+
+describe("paymentMethodOrderForMountCurrency", () => {
+  it("puts Local card right after Card on a KRW mount and leaves every other mount to Stripe", () => {
+    expect(paymentMethodOrderForMountCurrency("krw")).toEqual([
+      "card",
+      "kr_card",
+      "naver_pay",
+      "kakao_pay",
+      "samsung_pay",
+      "payco",
+    ]);
+    expect(paymentMethodOrderForMountCurrency("KRW")).toEqual(paymentMethodOrderForMountCurrency("krw"));
+    expect(paymentMethodOrderForMountCurrency("usd")).toBeUndefined();
+    expect(paymentMethodOrderForMountCurrency("inr")).toBeUndefined();
   });
 });
 

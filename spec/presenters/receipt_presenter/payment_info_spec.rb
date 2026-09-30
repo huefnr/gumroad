@@ -945,6 +945,16 @@ describe ReceiptPresenter::PaymentInfo do
           expect(payment_info.send(:credit_card_note)).to be_nil
         end
       end
+
+      CardType::SOUTH_KOREAN_METHOD_LABELS.each_key do |south_korean_method|
+        context "when the card_type is #{south_korean_method}" do
+          before { purchase.update!(card_type: south_korean_method) }
+
+          it "returns nil" do
+            expect(payment_info.send(:credit_card_note)).to be_nil
+          end
+        end
+      end
     end
 
     context "with a Purchase" do
@@ -1013,6 +1023,24 @@ describe ReceiptPresenter::PaymentInfo do
           expect(payment_info.payment_method_attribute).to eq(
             { label: "Payment method", value: "LINK" }
           )
+        end
+      end
+
+      {
+        CardType::KR_CARD => "Korean card",
+        CardType::KAKAO_PAY => "Kakao Pay",
+        CardType::NAVER_PAY => "Naver Pay",
+        CardType::SAMSUNG_PAY => "Samsung Pay",
+        CardType::PAYCO => "PAYCO",
+      }.each do |south_korean_method, label|
+        context "when the purchase was paid with #{south_korean_method}" do
+          before { purchase.update!(card_type: south_korean_method, card_visual: nil) }
+
+          it "renders the method's name rather than its upcased identifier" do
+            expect(payment_info.payment_method_attribute).to eq(
+              { label: "Payment method", value: label }
+            )
+          end
         end
       end
     end

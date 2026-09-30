@@ -24,7 +24,7 @@ describe Checkout::PaymentMethodResolver do
 
       it "resolves the full inline dynamic method set as eligible" do
         expect(resolve.eligible_payment_method_types)
-          .to eq(%w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix cashapp us_bank_account alipay])
+          .to eq(%w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix kr_card kakao_pay naver_pay samsung_pay payco cashapp us_bank_account alipay])
       end
 
       it "enables the launched methods on Stripe for a US buyer, gating the rest behind later units" do
@@ -112,7 +112,7 @@ describe Checkout::PaymentMethodResolver do
 
         it "keeps the eligible policy set unchanged — the flag only widens the launched set" do
           expect(resolve(buyer_country: "US", cart_total_usd_cents: 10_00).eligible_payment_method_types)
-            .to eq(%w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix cashapp us_bank_account alipay])
+            .to eq(%w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix kr_card kakao_pay naver_pay samsung_pay payco cashapp us_bank_account alipay])
         end
 
         it "drops Klarna for a non-US buyer — v1 offers it on the USD lane to US buyers only" do
@@ -237,7 +237,7 @@ describe Checkout::PaymentMethodResolver do
 
         it "keeps the eligible policy set unchanged — the flag only widens the launched set" do
           expect(resolve(buyer_country: "US").eligible_payment_method_types)
-            .to eq(%w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix cashapp us_bank_account alipay])
+            .to eq(%w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix kr_card kakao_pay naver_pay samsung_pay payco cashapp us_bank_account alipay])
         end
 
         it "offers Alipay to a non-US buyer — unlike Klarna it carries no buyer-country lock, and most of the target cohort buys from outside mainland China" do
@@ -554,6 +554,71 @@ describe Checkout::PaymentMethodResolver do
 
           resolution = resolve(buyer_country: "BR", cart_product_currency: "brl", recurring: true)
           expect(resolution.eligible_payment_method_types).not_to include("pix")
+        end
+
+        describe "South Korean methods" do
+          let(:south_korean_methods) { %w[kr_card kakao_pay naver_pay samsung_pay payco] }
+
+          it "surfaces every South Korean method in test mode for a South Korean buyer on a KRW mount" do
+            expect(resolve(buyer_country: "KR", cart_product_currency: "krw").payment_method_types).to include(*south_korean_methods)
+          end
+
+          it "launches only the method whose own launch flag is on in live mode" do
+            allow(Checkout::BuyerCurrencyEligibility).to receive(:stripe_test_mode?).and_return(false)
+            Feature.activate_user(:checkout_local_method_kakao_pay, seller)
+
+            methods = resolve(buyer_country: "KR", cart_product_currency: "krw").payment_method_types
+            expect(methods).to include("kakao_pay")
+            expect(methods).not_to include("kr_card", "naver_pay", "samsung_pay", "payco", "ideal", "bancontact", "upi", "pix")
+          end
+
+          it "keeps them off in live mode while no launch flag is on, even with another local method launched" do
+            allow(Checkout::BuyerCurrencyEligibility).to receive(:stripe_test_mode?).and_return(false)
+            Feature.activate_user(:checkout_local_method_upi, seller)
+
+            expect(resolve(buyer_country: "KR", cart_product_currency: "krw").payment_method_types).not_to include(*south_korean_methods)
+          end
+
+          it "keeps launched methods off buyers outside South Korea, and off an unknown buyer country" do
+            allow(Checkout::BuyerCurrencyEligibility).to receive(:stripe_test_mode?).and_return(false)
+            south_korean_methods.each { Feature.activate_user(:"checkout_local_method_#{_1}", seller) }
+
+            expect(resolve(buyer_country: "US", cart_product_currency: "krw").payment_method_types).not_to include(*south_korean_methods)
+            expect(resolve(buyer_country: "JP", cart_product_currency: "krw").payment_method_types).not_to include(*south_korean_methods)
+            expect(resolve(buyer_country: nil, cart_product_currency: "krw").payment_method_types).not_to include(*south_korean_methods)
+          end
+
+          it "keeps launched methods off a South Korean buyer whose mount is not KRW — Stripe only accepts them on KRW intents" do
+            allow(Checkout::BuyerCurrencyEligibility).to receive(:stripe_test_mode?).and_return(false)
+            south_korean_methods.each { Feature.activate_user(:"checkout_local_method_#{_1}", seller) }
+
+            expect(resolve(buyer_country: "KR", cart_product_currency: "usd").payment_method_types).not_to include(*south_korean_methods)
+            expect(resolve(buyer_country: "KR", cart_product_currency: nil).payment_method_types).not_to include(*south_korean_methods)
+          end
+
+          it "retains a launched method on a PPP-discounted checkout from South Korea — region-locked methods pass the U13 matrix" do
+            allow(Checkout::BuyerCurrencyEligibility).to receive(:stripe_test_mode?).and_return(false)
+            Feature.activate_user(:checkout_local_method_naver_pay, seller)
+
+            expect(resolve(buyer_country: "KR", cart_product_currency: "krw", ppp_discounted: true).payment_method_types).to include("naver_pay")
+          end
+
+          it "never offers them on a recurring cart" do
+            allow(Checkout::BuyerCurrencyEligibility).to receive(:stripe_test_mode?).and_return(false)
+            south_korean_methods.each { Feature.activate_user(:"checkout_local_method_#{_1}", seller) }
+
+            resolution = resolve(buyer_country: "KR", cart_product_currency: "krw", recurring: true)
+            expect(resolution.eligible_payment_method_types).not_to include(*south_korean_methods)
+          end
+
+          it "keeps Klarna and Alipay off the KRW mount they cannot charge" do
+            Feature.activate_user(:checkout_local_method_klarna, seller)
+            Feature.activate_user(:checkout_local_method_alipay, seller)
+
+            methods = resolve(buyer_country: "KR", cart_product_currency: "krw", cart_total_usd_cents: 50_00).payment_method_types
+            expect(methods).to include("kakao_pay")
+            expect(methods).not_to include("klarna", "alipay")
+          end
         end
 
         it "keeps a launched method off carts not priced in its forced currency, even in live mode" do

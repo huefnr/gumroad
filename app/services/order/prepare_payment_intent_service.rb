@@ -270,6 +270,7 @@ class Order::PreparePaymentIntentService
       return Checkout::PaymentMethodResolver::US_ALPHA2 if Checkout::PaymentMethodResolver::US_LOCKED_PAYMENT_METHOD_TYPES.include?(method_type)
       return Checkout::PaymentMethodResolver::IN_ALPHA2 if Checkout::PaymentMethodResolver::IN_LOCKED_PAYMENT_METHOD_TYPES.include?(method_type)
       return Checkout::PaymentMethodResolver::BR_ALPHA2 if Checkout::PaymentMethodResolver::BR_LOCKED_PAYMENT_METHOD_TYPES.include?(method_type)
+      return Checkout::PaymentMethodResolver::KR_ALPHA2 if Checkout::PaymentMethodResolver::KR_LOCKED_PAYMENT_METHOD_TYPES.include?(method_type)
 
       nil
     end
@@ -1333,7 +1334,7 @@ class Order::PreparePaymentIntentService
       return nil unless currencies.one?
 
       currency = currencies.first
-      return nil unless Checkout::BuyerCurrencyEligibility::FORCED_CURRENCY_PAYMENT_METHODS.value?(currency)
+      return nil unless Checkout::BuyerCurrencyEligibility.listed_forced_currency?(currency)
 
       currency
     end

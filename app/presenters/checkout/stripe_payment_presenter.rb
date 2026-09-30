@@ -281,9 +281,13 @@ class Checkout::StripePaymentPresenter
       end
       quote_remount = client_confirm_quote_remount?
       inr_local_method_types = (quote_remount || listed_currency) ? inr_local_methods : []
+      # No listed_currency arm: a KRW-priced cart never mounts a listed Element (see
+      # Checkout::BuyerCurrencyEligibility.listed_forced_currency?).
+      krw_local_method_types = quote_remount ? krw_local_methods : []
       # Never list a forced-currency method on an element that is not mounted in that
       # currency — Stripe rejects the whole session, card included. UPI for a USD-priced
-      # cart is added only after the browser remounts in INR (inr_local_methods).
+      # cart is added only after the browser remounts in INR (inr_local_methods), and the
+      # South Korean methods only after it remounts in KRW (krw_local_methods).
       payment_method_types = Array(payment_method_types).reject do |payment_method_type|
         forced_currency = Checkout::BuyerCurrencyEligibility.forced_currency_for(payment_method_type)
         forced_currency.present? && forced_currency != element_currency
@@ -313,12 +317,16 @@ class Checkout::StripePaymentPresenter
         payment_method_list_token: issued_payment_method_list_token(
           payment_method_types,
           inr_local_method_types:,
+          krw_local_method_types:,
           direct_listed_currency: listed_currency ? element_currency : nil,
           direct_listed_currency_rate: signed_listed_rate,
         ),
         stripe_link_enabled: payment_method_types.include?(Checkout::PaymentMethodResolver::LINK_PAYMENT_METHOD_TYPE),
         stripe_connect_account_id: resolution.stripe_connect_account_id,
       }
+      # Sent only when non-empty so every checkout without a launched South Korean method keeps
+      # the exact payload it had before.
+      elements_options[:krw_local_methods] = krw_local_method_types if krw_local_method_types.any?
       elements_options[:direct_listed_currency_rate] = signed_listed_rate if signed_listed_rate.present?
       elements_options[:direct_listed_card] = true if direct_listed_card
 
@@ -424,14 +432,16 @@ class Checkout::StripePaymentPresenter
          Checkout::PaymentMethodResolver::ALIPAY_PAYMENT_METHOD_TYPE]
     end
 
-    def issued_payment_method_list_token(payment_method_types, inr_local_method_types: inr_local_methods, direct_listed_currency: nil, direct_listed_currency_rate: nil)
+    def issued_payment_method_list_token(payment_method_types, inr_local_method_types: inr_local_methods, krw_local_method_types: [], direct_listed_currency: nil, direct_listed_currency_rate: nil)
       quoted_types = quoted_remount_payment_method_types(payment_method_types)
       inr_types = (quoted_types + inr_local_method_types).uniq
+      krw_types = (quoted_types + krw_local_method_types).uniq
       Checkout::PaymentMethodListToken.issue(
         payment_method_types:,
         sellers:,
         quoted_payment_method_types: quoted_types,
         inr_payment_method_types: inr_local_method_types.present? ? inr_types : nil,
+        krw_payment_method_types: krw_local_method_types.present? ? krw_types : nil,
         direct_listed_currency:,
         direct_listed_currency_rate:,
       )
@@ -454,6 +464,23 @@ class Checkout::StripePaymentPresenter
     end
 
     def inr_method_resolution
+      local_remount_method_resolution(Currency::INR)
+    end
+
+    # The South Korean methods take the same route as UPI above, and it is their only one: a
+    # USD-priced cart whose Element the surcharge quote remounted in KRW.
+    def krw_local_methods
+      return [] unless sellers.one?
+      return [] unless buyer_country == Checkout::PaymentMethodResolver::KR_ALPHA2
+      return [] if items.any? { _1[:recurrence].present? || _1[:pay_in_installments] || _1[:native_type] == Link::NATIVE_TYPE_COMMISSION }
+      return [] if setup_for_future_charges_without_charging?(items)
+      return [] unless Checkout::BuyerCurrencyEligibility.seller_enabled?(sellers.first)
+
+      # The resolver applies each method's own launch flag (or Stripe test mode).
+      Array(local_remount_method_resolution(Currency::KRW).payment_method_types) & Checkout::PaymentMethodResolver::KR_LOCKED_PAYMENT_METHOD_TYPES
+    end
+
+    def local_remount_method_resolution(currency)
       Checkout::PaymentMethodResolver.new(
         sellers: [sellers.first],
         recurring: false,
@@ -461,7 +488,7 @@ class Checkout::StripePaymentPresenter
         setup_for_future: false,
         buyer_country:,
         ppp_discounted: ppp_verification_applies?,
-        cart_product_currency: Currency::INR,
+        cart_product_currency: currency,
         cart_total_usd_cents: nil,
         recurring_upi_registration: false
       ).resolve
@@ -570,7 +597,7 @@ class Checkout::StripePaymentPresenter
       return nil unless currencies.one?
 
       currency = currencies.first
-      return nil unless Checkout::BuyerCurrencyEligibility::FORCED_CURRENCY_PAYMENT_METHODS.value?(currency)
+      return nil unless Checkout::BuyerCurrencyEligibility.listed_forced_currency?(currency)
 
       currency
     end

@@ -34,6 +34,11 @@ class StripeConnectPaymentMethodAvailabilityService
     "bancontact" => "bancontact_payments",
     "upi" => "upi_payments",
     "pix" => "pix_payments",
+    "kr_card" => "kr_card_payments",
+    "kakao_pay" => "kakao_pay_payments",
+    "naver_pay" => "naver_pay_payments",
+    "samsung_pay" => "samsung_pay_payments",
+    "payco" => "payco_payments",
     "sepa_debit" => "sepa_debit_payments",
     # Alipay's account gate lives in the resolver (US-based accounts only, because this lane's
     # intents are USD and Stripe ties Alipay presentment currencies to the account's business

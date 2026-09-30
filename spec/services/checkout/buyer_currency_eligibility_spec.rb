@@ -851,6 +851,40 @@ describe Checkout::BuyerCurrencyEligibility do
       expect(upi_decision.currency).to eq(Currency::INR)
     end
 
+    %w[kr_card kakao_pay naver_pay samsung_pay payco].each do |south_korean_method|
+      it "allows #{south_korean_method} in KRW for a USD-priced product via the FX quote path" do
+        decision = described_class.new(order:,
+                                       seller:,
+                                       merchant_account:,
+                                       chargeable:,
+                                       purchases:,
+                                       params:,
+                                       setup_future_charges:,
+                                       off_session:).method_forced_decision(payment_method: south_korean_method)
+
+        expect(decision).to be_eligible
+        expect(decision.currency).to eq(Currency::KRW)
+        expect(decision.direct_listed_amount?).to eq(false)
+      end
+    end
+
+    # Listed KRW cents are 1/100 won; the direct-listed case would forward them as whole won.
+    it "withholds a South Korean method from a KRW-priced product instead of charging its listed cents" do
+      purchase.update!(link: create(:product, user: seller, price_currency_type: Currency::KRW, price_cents: 1_500_000))
+
+      decision = described_class.new(order:,
+                                     seller:,
+                                     merchant_account:,
+                                     chargeable:,
+                                     purchases:,
+                                     params:,
+                                     setup_future_charges:,
+                                     off_session:).method_forced_decision(payment_method: "kakao_pay")
+
+      expect(decision).not_to be_eligible
+      expect(decision.fallback_reason).to eq(:unsupported_forced_currency)
+    end
+
     it "does not depend on GeoIP buyer currency detection" do
       allow_any_instance_of(described_class).to receive(:buyer_currency_for_ip).and_raise("GeoIP must not be consulted in method-forced mode")
 
@@ -1255,6 +1289,26 @@ describe Checkout::BuyerCurrencyEligibility do
 
       expect(kwd_decision).not_to be_eligible
       expect(kwd_decision.fallback_reason).to eq(:unsupported_forced_currency)
+    end
+  end
+
+  describe ".listed_forced_currency?" do
+    it "is true for the registry currencies Gumroad stores on Stripe's scale" do
+      expect(described_class.listed_forced_currency?(Currency::EUR)).to be(true)
+      expect(described_class.listed_forced_currency?(Currency::INR)).to be(true)
+      expect(described_class.listed_forced_currency?(Currency::BRL)).to be(true)
+      expect(described_class.listed_forced_currency?("EUR")).to be(true)
+    end
+
+    it "is false for KRW, which the registry forces but Gumroad stores in 1/100 won" do
+      expect(described_class.forced_currency_for("kakao_pay")).to eq(Currency::KRW)
+      expect(described_class.listed_forced_currency?(Currency::KRW)).to be(false)
+    end
+
+    it "is false for a currency no registry method forces" do
+      expect(described_class.listed_forced_currency?(Currency::USD)).to be(false)
+      expect(described_class.listed_forced_currency?(Currency::CAD)).to be(false)
+      expect(described_class.listed_forced_currency?(nil)).to be(false)
     end
   end
 

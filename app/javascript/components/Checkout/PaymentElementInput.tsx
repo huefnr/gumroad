@@ -19,6 +19,7 @@ import {
 } from "$app/components/Checkout/checkoutTheme";
 import {
   STRIPE_ELEMENTS_MODE_FOR_SETUP_INTENT,
+  paymentMethodOrderForMountCurrency,
   paymentMethodTypesForMountCurrency,
   type PaymentElementConfig,
   type PaymentElementClientConfirmConfig,
@@ -284,6 +285,8 @@ const PaymentElementControllerInput = ({
     return Object.keys(billingDetails).length > 0 ? { billingDetails } : undefined;
   }, [stripeLinkEnabled, linkPrefillEmail, defaultCountry, defaultName]);
 
+  const paymentMethodOrder = paymentMethodOrderForMountCurrency(mountCurrency);
+
   return (
     <PaymentElement
       options={{
@@ -294,6 +297,7 @@ const PaymentElementControllerInput = ({
         // card form: it keeps the tabs layout, whose tabs are hidden via the ".Tab" appearance
         // rule in StripePaymentElementProvider — the exact pre-flat-list behavior.
         layout: flatLayout ? { type: "accordion", radios: false, spacedAccordionItems: true } : { type: "tabs" },
+        ...(paymentMethodOrder ? { paymentMethodOrder } : {}),
         ...(defaultValues ? { defaultValues } : {}),
         // Checkout collects billing details in its own form, so each element field is only shown
         // when checkout does NOT already ask for it — nothing should be asked for twice. The

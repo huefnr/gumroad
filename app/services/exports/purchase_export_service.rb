@@ -37,6 +37,7 @@ class Exports::PurchaseExportService
     CardType::PIX => "Pix",
     CardType::KLARNA => "Klarna",
     CardType::ALIPAY => "Alipay",
+    **CardType::SOUTH_KOREAN_METHOD_LABELS,
   }.freeze
 
   def initialize(purchases)

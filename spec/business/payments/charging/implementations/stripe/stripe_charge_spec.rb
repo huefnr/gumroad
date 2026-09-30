@@ -330,6 +330,40 @@ describe StripeCharge, :vcr do
       end
     end
 
+    %w[kr_card kakao_pay naver_pay samsung_pay payco].each do |south_korean_method|
+      describe "with a stripe charge paid with #{south_korean_method}" do
+        let(:stripe_charge_hash) do
+          {
+            id: "ch_test_#{south_korean_method}",
+            status: "succeeded",
+            refunded: false,
+            dispute: nil,
+            currency: Currency::KRW,
+            amount: 15_000,
+            payment_method_details: { type: south_korean_method, south_korean_method.to_sym => {} },
+            billing_details: { address: { postal_code: nil } },
+            payment_method: "pm_test_#{south_korean_method}",
+            outcome: { risk_level: "normal" },
+          }
+        end
+
+        let(:stripe_charge_balance_transaction) do
+          {
+            currency: Currency::USD,
+            amount: 11_00,
+            fee_details: [{ type: "stripe_fee", currency: Currency::USD, amount: 50 }],
+          }
+        end
+
+        let(:subject) { described_class.new(Stripe::Charge.construct_from(stripe_charge_hash), stripe_charge_balance_transaction, nil, nil, nil) }
+
+        it "records the real method type instead of a generic card" do
+          expect(subject.card_type).to eq(south_korean_method)
+          expect(subject.payment_method_type).to eq(south_korean_method)
+        end
+      end
+    end
+
     describe "with a destination charge but nil destination payment balance transaction" do
       let(:stripe_charge_hash) do
         {

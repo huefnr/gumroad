@@ -128,11 +128,12 @@ class ReceiptPresenter::PaymentInfo
 
       # Inline wallet methods (e.g. Link) carry a card_type but no card_visual (no last4), so
       # render the method name alone rather than dereferencing a nil visual.
+      method_name = CardType::SOUTH_KOREAN_METHOD_LABELS.fetch(orderable.card_type) { orderable.card_type.upcase }
       value =
         if orderable.card_visual.present?
-          "#{orderable.card_type.upcase} *#{orderable.card_visual.delete('*').delete(' ')}"
+          "#{method_name} *#{orderable.card_visual.delete('*').delete(' ')}"
         else
-          orderable.card_type.upcase
+          method_name
         end
 
       {
@@ -173,6 +174,9 @@ class ReceiptPresenter::PaymentInfo
       # Pix) and buy-now-pay-later (Klarna). None of them produce a credit card statement line,
       # so the note would be wrong.
       return if orderable.card_type.in?([CardType::PAYPAL, CardType::LINK, CardType::UPI, CardType::IDEAL, CardType::BANCONTACT, CardType::PIX, CardType::KLARNA, CardType::ALIPAY])
+      # The South Korean methods, kr_card included, are processed through Stripe's local
+      # processor partner, so GUMRD.COM* is not a statement line we can promise.
+      return if CardType::SOUTH_KOREAN_METHOD_LABELS.key?(orderable.card_type)
 
       # TODO: Update when multiple charges per receipt are supported
       "The charge will be listed as GUMRD.COM* on your credit card statement."
