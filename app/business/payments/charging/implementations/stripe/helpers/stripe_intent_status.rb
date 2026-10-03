@@ -42,7 +42,9 @@ class StripeIntentStatus
   # card/mandate intents, so they never carry these methods and keep alerting.
   # Alipay is included because Stripe can surface either the generic redirect_to_url action or
   # its own alipay_handle_redirect type above, depending on the confirm; both are client-owned.
-  CLIENT_REDIRECT_PAYMENT_METHOD_TYPES = %w[ideal bancontact klarna cashapp afterpay_clearpay affirm alipay].freeze
+  # The South Korean methods all confirm through redirect_to_url: Stripe.js sends the buyer to
+  # the wallet's or the local processor's page to authenticate.
+  CLIENT_REDIRECT_PAYMENT_METHOD_TYPES = %w[ideal bancontact klarna cashapp afterpay_clearpay affirm alipay kr_card kakao_pay naver_pay samsung_pay payco].freeze
   # Pix and UPI buyers can still pay after the browser returns from confirmation.
   ASYNCHRONOUS_CUSTOMER_INITIATED_ACTION_TYPES = ["pix_display_qr_code", "upi_handle_redirect_or_display_qr_code"].freeze
 

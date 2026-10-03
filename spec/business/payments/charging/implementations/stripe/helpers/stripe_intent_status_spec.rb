@@ -38,6 +38,16 @@ describe StripeIntentStatus do
         expect(described_class.client_handled_next_action?("redirect_to_url", %w[card alipay], payment_method_type: "alipay")).to eq(true)
       end
 
+      %w[kr_card kakao_pay naver_pay samsung_pay payco].each do |south_korean_method|
+        it "accepts when the attempted method is #{south_korean_method} — Stripe.js owns the redirect to the wallet or local processor" do
+          expect(described_class.client_handled_next_action?("redirect_to_url", ["card", south_korean_method], payment_method_type: south_korean_method)).to eq(true)
+        end
+      end
+
+      it "keeps alerting on a card redirect when the menu merely offers a South Korean method" do
+        expect(described_class.client_handled_next_action?("redirect_to_url", %w[card kakao_pay], payment_method_type: "card")).to eq(false)
+      end
+
       it "keeps alerting when the attempted-method lookup FAILED — a lookup failure is not evidence the redirect was client-owned, and the menu fallback would swallow it (cashapp is on nearly every US menu)" do
         expect(described_class.client_handled_next_action?("redirect_to_url", %w[card klarna cashapp], payment_method_type: described_class::PAYMENT_METHOD_LOOKUP_FAILED)).to eq(false)
       end

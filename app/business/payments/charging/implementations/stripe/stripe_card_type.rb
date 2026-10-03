@@ -33,7 +33,12 @@ class StripeCardType
     # line that will never appear.
     "klarna" => CardType::KLARNA,
     # Alipay likewise reports payment_method_details.type == "alipay".
-    "alipay" => CardType::ALIPAY
+    "alipay" => CardType::ALIPAY,
+    "kr_card" => CardType::KR_CARD,
+    "kakao_pay" => CardType::KAKAO_PAY,
+    "naver_pay" => CardType::NAVER_PAY,
+    "samsung_pay" => CardType::SAMSUNG_PAY,
+    "payco" => CardType::PAYCO
   }.freeze
 
   def self.to_card_type(stripe_card_type)

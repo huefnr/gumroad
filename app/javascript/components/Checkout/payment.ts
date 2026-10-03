@@ -91,6 +91,8 @@ export type PaymentElementClientConfirmConfig = {
   // Methods the browser may add only after remounting in INR. Listing UPI on a USD
   // element makes Stripe reject the whole session, card included.
   inr_local_methods?: string[];
+  // The same, for the South Korean methods on a KRW remount. Absent unless one is launched.
+  krw_local_methods?: string[];
   // Signed server copy of payment_method_types above, echoed back at /orders/prepare so the
   // deferred intent is built from the list this page actually mounted rather than a second
   // server-side resolution (gumroad-private#1528). Opaque to the browser.
@@ -109,11 +111,26 @@ const FORCED_CURRENCY_PAYMENT_METHODS: Record<string, string> = {
   bancontact: "eur",
   upi: "inr",
   pix: "brl",
+  kr_card: "krw",
+  kakao_pay: "krw",
+  naver_pay: "krw",
+  samsung_pay: "krw",
+  payco: "krw",
 };
+
+// Stripe orders the Element's rows dynamically unless told otherwise, and on a KRW mount that put
+// Local card last. Korean buyers pay by card far more than through any one wallet, so it goes
+// right after Card. Methods missing from the list keep Stripe's ordering after these.
+const KRW_PAYMENT_METHOD_ORDER = ["card", "kr_card", "naver_pay", "kakao_pay", "samsung_pay", "payco"];
+
+export function paymentMethodOrderForMountCurrency(currency: string): string[] | undefined {
+  return currency.toLowerCase() === "krw" ? KRW_PAYMENT_METHOD_ORDER : undefined;
+}
 
 export function paymentMethodTypesForMountCurrency(
   elementsOptions: Pick<PaymentElementConfig | PaymentElementClientConfirmConfig, "payment_method_types"> & {
     inr_local_methods?: string[];
+    krw_local_methods?: string[];
   },
   currency: string,
 ): string[] {
@@ -126,10 +143,14 @@ export function paymentMethodTypesForMountCurrency(
     const forced = FORCED_CURRENCY_PAYMENT_METHODS[method];
     return !forced || forced === mount;
   });
-  if (mount === "inr") {
-    for (const method of elementsOptions.inr_local_methods ?? []) {
-      if (!types.includes(method)) types.push(method);
-    }
+  const localMethods =
+    mount === "inr"
+      ? elementsOptions.inr_local_methods
+      : mount === "krw"
+        ? elementsOptions.krw_local_methods
+        : undefined;
+  for (const method of localMethods ?? []) {
+    if (!types.includes(method)) types.push(method);
   }
   return types;
 }

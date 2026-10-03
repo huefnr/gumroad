@@ -29,16 +29,22 @@ class Checkout::PaymentMethodListToken
 
   PURPOSE = "checkout_payment_method_list"
 
+  # Remount currencies that add local methods on top of the quoted list, and the payload key
+  # each one's signed list lives under.
+  LOCAL_REMOUNT_PAYLOAD_KEYS = { "inr" => "inr_types", "krw" => "krw_types" }.freeze
+
   class << self
-    def issue(payment_method_types:, sellers:, quoted_payment_method_types: nil, inr_payment_method_types: nil, direct_listed_currency: nil, direct_listed_currency_rate: nil)
+    def issue(payment_method_types:, sellers:, quoted_payment_method_types: nil, inr_payment_method_types: nil, krw_payment_method_types: nil, direct_listed_currency: nil, direct_listed_currency_rate: nil)
       return nil if payment_method_types.blank?
 
       payload = { "types" => payment_method_types.map(&:to_s), "sellers" => seller_ids(sellers) }
       # Quoted remounts leave USD (CAD, EUR, INR). Those Elements cannot list USD-only
-      # methods, and an INR remount also adds UPI. Signing the remount lists here is what
-      # lets prepare echo the list the Element actually mounted after the upgrade.
+      # methods, an INR remount also adds UPI, and a KRW remount the South Korean methods.
+      # Signing the remount lists here is what lets prepare echo the list the Element actually
+      # mounted after the upgrade.
       payload["quoted_types"] = quoted_payment_method_types.map(&:to_s) if quoted_payment_method_types.present?
       payload["inr_types"] = inr_payment_method_types.map(&:to_s) if inr_payment_method_types.present?
+      payload["krw_types"] = krw_payment_method_types.map(&:to_s) if krw_payment_method_types.present?
       rate = positive_decimal(direct_listed_currency_rate)
       if direct_listed_currency.present? && rate.present?
         payload["direct_listed_currency"] = direct_listed_currency.to_s.downcase
@@ -54,9 +60,9 @@ class Checkout::PaymentMethodListToken
     # that would otherwise succeed.
     #
     # `currency` is the Element's mount currency at pay time. A USD-priced cart starts in USD
-    # (`types`) and may remount in the quoted currency (`quoted_types`) or INR (`inr_types`).
-    # A non-USD mount without its remount key returns nil so prepare fails closed instead of
-    # echoing the USD list onto an INR/CAD ConfirmationToken.
+    # (`types`) and may remount in the quoted currency (`quoted_types`), INR (`inr_types`) or
+    # KRW (`krw_types`). A non-USD mount without its remount key returns nil so prepare fails
+    # closed instead of echoing the USD list onto an INR/CAD ConfirmationToken.
     def verify(token, sellers:, currency: nil)
       payload = verified_payload(token, sellers:)
       return nil unless payload
@@ -94,8 +100,9 @@ class Checkout::PaymentMethodListToken
 
       def types_for_currency(payload, currency)
         mount = currency.to_s.downcase.presence
-        if mount == "inr"
-          return payload["inr_types"] if string_types?(payload["inr_types"])
+        local_key = LOCAL_REMOUNT_PAYLOAD_KEYS[mount]
+        if local_key.present?
+          return payload[local_key] if string_types?(payload[local_key])
           return payload["quoted_types"] if string_types?(payload["quoted_types"])
           return nil
         end

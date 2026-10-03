@@ -105,6 +105,20 @@ describe StripeConnectPaymentMethodAvailabilityService do
       expect(service.available_payment_method_types(%w[alipay])).to eq(%w[alipay])
     end
 
+    it "answers for each South Korean method from its own capability" do
+      merchant_account.update!(stripe_capabilities_snapshot: {
+                                 "capabilities" => {
+                                   "kr_card_payments" => "active",
+                                   "kakao_pay_payments" => "active",
+                                   "naver_pay_payments" => "inactive",
+                                   "samsung_pay_payments" => "pending",
+                                 },
+                                 "refreshed_at" => Time.current.iso8601,
+                               })
+
+      expect(service.available_payment_method_types(%w[kr_card kakao_pay naver_pay samsung_pay payco])).to eq(%w[kr_card kakao_pay])
+    end
+
     it "drops Alipay when the account has no alipay_payments capability — a connected account that never enabled Alipay must never see it listed" do
       merchant_account.update!(stripe_capabilities_snapshot: {
                                  "capabilities" => { "card_payments" => "active" },

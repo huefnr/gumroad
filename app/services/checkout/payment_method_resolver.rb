@@ -13,7 +13,7 @@
 class Checkout::PaymentMethodResolver
   # Buyer-present single-seller dynamic set. Apple Pay / Google Pay ride on "card" in the Payment
   # Element, so they are not separate types here.
-  ONE_TIME_PAYMENT_METHOD_TYPES = %w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix cashapp us_bank_account alipay].freeze
+  ONE_TIME_PAYMENT_METHOD_TYPES = %w[card link klarna afterpay_clearpay affirm ideal bancontact upi pix kr_card kakao_pay naver_pay samsung_pay payco cashapp us_bank_account alipay].freeze
   # Dropped on the general recurring lifecycle:
   #   - afterpay_clearpay, affirm, upi: buyer-present only. The narrowly scoped UPI Autopay
   #     registration path below replaces this set with card + UPI.
@@ -21,7 +21,9 @@ class Checkout::PaymentMethodResolver
   #     iDEAL/Bancontact needs a SEPA Direct Debit mandate we don't collect; Pix cannot re-bill.
   #   - alipay: Stripe gates recurring Alipay behind approval and excludes it from subscription mode.
   #   - klarna: a launch decision, not a capability limit (gumroad-private#933).
-  RECURRING_INELIGIBLE_PAYMENT_METHOD_TYPES = %w[afterpay_clearpay affirm upi pix klarna alipay ideal bancontact].freeze
+  #   - the South Korean methods: also a launch decision. Stripe can re-bill kr_card, kakao_pay
+  #     and naver_pay, but nothing here stores their mandate; samsung_pay and payco cannot.
+  RECURRING_INELIGIBLE_PAYMENT_METHOD_TYPES = %w[afterpay_clearpay affirm upi pix klarna alipay ideal bancontact kr_card kakao_pay naver_pay samsung_pay payco].freeze
   # Always-on for the client-confirmed path; cashapp is still region-gated below. Everything else is
   # flag-gated instead: the forced-currency methods (LOCAL_METHOD_LAUNCH_FEATURES on
   # Checkout::BuyerCurrencyEligibility), Klarna and Alipay (KLARNA_/ALIPAY_LAUNCH_FEATURE). SEPA is
@@ -71,6 +73,9 @@ class Checkout::PaymentMethodResolver
   # Withheld from buyers GeoIP places outside the eurozone. Offering one mounts the whole Element in
   # EUR, so card and Link are billed in EUR too, a currency the product page never showed them.
   EUR_LOCKED_PAYMENT_METHOD_TYPES = %w[ideal bancontact].freeze
+  # South Korean buyers on KRW PaymentIntents only: every one of these authenticates through a
+  # Korean issuer or wallet app. Unknown GeoIP fails safe.
+  KR_LOCKED_PAYMENT_METHOD_TYPES = %w[kr_card kakao_pay naver_pay samsung_pay payco].freeze
   PIX_PAYMENT_METHOD_TYPE = "pix"
   # Stripe's Pix transaction window: at least 0.50 BRL, at most 3,000 USD per payment
   # (https://docs.stripe.com/payments/pix#transaction-limits). Each bound stays in the currency
@@ -91,13 +96,14 @@ class Checkout::PaymentMethodResolver
   US_ALPHA2 = "US"
   IN_ALPHA2 = "IN"
   BR_ALPHA2 = "BR"
+  KR_ALPHA2 = "KR"
   # PPP method matrix (U13): a PPP-discounted checkout may only offer methods whose funding country
   # Stripe exposes pre-charge (card.country, later sepa_debit.country). sepa_debit is wired but
   # dormant until SEPA launches post-FX.
   PPP_VERIFIABLE_PAYMENT_METHOD_TYPES = %w[card sepa_debit].freeze
   # Also allowed on a PPP checkout: region-locked methods, because the discount is based on the
   # buyer's GeoIP country and the region gates above already require it to be the lock country.
-  PPP_REGION_LOCKED_PAYMENT_METHOD_TYPES = (US_LOCKED_PAYMENT_METHOD_TYPES + IN_LOCKED_PAYMENT_METHOD_TYPES + BR_LOCKED_PAYMENT_METHOD_TYPES).freeze
+  PPP_REGION_LOCKED_PAYMENT_METHOD_TYPES = (US_LOCKED_PAYMENT_METHOD_TYPES + IN_LOCKED_PAYMENT_METHOD_TYPES + BR_LOCKED_PAYMENT_METHOD_TYPES + KR_LOCKED_PAYMENT_METHOD_TYPES).freeze
   # Multi-seller and other Lane A carts keep Gumroad's existing card + PayPal set.
   LANE_A_PAYMENT_METHOD_TYPES = %w[card paypal].freeze
 
@@ -256,6 +262,7 @@ class Checkout::PaymentMethodResolver
       methods -= US_LOCKED_PAYMENT_METHOD_TYPES unless buyer_country == US_ALPHA2
       methods -= IN_LOCKED_PAYMENT_METHOD_TYPES unless buyer_country == IN_ALPHA2
       methods -= BR_LOCKED_PAYMENT_METHOD_TYPES unless buyer_country == BR_ALPHA2
+      methods -= KR_LOCKED_PAYMENT_METHOD_TYPES unless buyer_country == KR_ALPHA2
       methods -= EUR_LOCKED_PAYMENT_METHOD_TYPES unless eur_locked_methods_allowed?
       methods
     end

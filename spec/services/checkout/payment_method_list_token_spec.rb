@@ -104,6 +104,54 @@ describe Checkout::PaymentMethodListToken do
       expect(described_class.verify(token, sellers: [seller])).to eq(%w[card link])
     end
 
+    it "returns the signed KRW remount list when the Element remounted in KRW" do
+      token = described_class.issue(
+        payment_method_types: %w[card link],
+        sellers: [seller],
+        quoted_payment_method_types: %w[card link],
+        krw_payment_method_types: %w[card link kakao_pay naver_pay],
+      )
+
+      expect(described_class.verify(token, sellers: [seller], currency: "krw")).to eq(%w[card link kakao_pay naver_pay])
+      expect(described_class.verify(token, sellers: [seller], currency: "KRW")).to eq(%w[card link kakao_pay naver_pay])
+      expect(described_class.verify(token, sellers: [seller], currency: "usd")).to eq(%w[card link])
+      expect(described_class.verify(token, sellers: [seller], currency: "jpy")).to eq(%w[card link])
+    end
+
+    it "keeps the INR and KRW remount lists apart" do
+      token = described_class.issue(
+        payment_method_types: %w[card link],
+        sellers: [seller],
+        inr_payment_method_types: %w[card link upi],
+        krw_payment_method_types: %w[card link kakao_pay],
+      )
+
+      expect(described_class.verify(token, sellers: [seller], currency: "inr")).to eq(%w[card link upi])
+      expect(described_class.verify(token, sellers: [seller], currency: "krw")).to eq(%w[card link kakao_pay])
+    end
+
+    it "falls back from a missing KRW list to quoted types, and to nil without them" do
+      quoted = described_class.issue(
+        payment_method_types: %w[card link cashapp],
+        sellers: [seller],
+        quoted_payment_method_types: %w[card link],
+      )
+      unquoted = described_class.issue(payment_method_types: %w[card link cashapp], sellers: [seller])
+
+      expect(described_class.verify(quoted, sellers: [seller], currency: "krw")).to eq(%w[card link])
+      expect(described_class.verify(unquoted, sellers: [seller], currency: "krw")).to be_nil
+    end
+
+    it "does not return a KRW remount list issued for a different seller" do
+      token = described_class.issue(
+        payment_method_types: %w[card link],
+        sellers: [seller],
+        krw_payment_method_types: %w[card link kakao_pay],
+      )
+
+      expect(described_class.verify(token, sellers: [other_seller], currency: "krw")).to be_nil
+    end
+
     it "returns the signed quoted remount list for a non-USD, non-INR mount" do
       token = described_class.issue(
         payment_method_types: %w[card link cashapp],

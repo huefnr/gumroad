@@ -45,6 +45,15 @@ class Checkout::BuyerCurrencyEligibility
     # intents — creating one in any other currency is rejected outright ("Payments with pix
     # support the following currencies: brl", verified against our live platform account).
     "pix" => Currency::BRL,
+    # Stripe accepts the South Korean methods on KRW intents only, and KRW is the one registry
+    # currency Gumroad stores on a different scale than Stripe charges (1/100 won vs whole
+    # won). A KRW-priced cart therefore never mounts a method-forced Element (see
+    # .listed_forced_currency?); these are reachable only through a quoted KRW remount.
+    "kr_card" => Currency::KRW,
+    "kakao_pay" => Currency::KRW,
+    "naver_pay" => Currency::KRW,
+    "samsung_pay" => Currency::KRW,
+    "payco" => Currency::KRW,
   }.freeze
 
   # Live-mode launch flags for forced-currency methods. Test mode keeps every
@@ -55,6 +64,11 @@ class Checkout::BuyerCurrencyEligibility
     "bancontact" => :checkout_local_method_bancontact,
     "upi" => :checkout_local_method_upi,
     "pix" => :checkout_local_method_pix,
+    "kr_card" => :checkout_local_method_kr_card,
+    "kakao_pay" => :checkout_local_method_kakao_pay,
+    "naver_pay" => :checkout_local_method_naver_pay,
+    "samsung_pay" => :checkout_local_method_samsung_pay,
+    "payco" => :checkout_local_method_payco,
   }.freeze
 
   # `direct_listed_amount` is set when every product is already priced in the charge
@@ -72,6 +86,15 @@ class Checkout::BuyerCurrencyEligibility
 
   def self.forced_currency_for(payment_method)
     FORCED_CURRENCY_PAYMENT_METHODS[payment_method.to_s.downcase]
+  end
+
+  # Whether a cart priced uniformly in `currency` may mount a method-forced Element. That
+  # lane forwards the listed cents verbatim, so a registry currency whose storage scale
+  # differs from Stripe's would mount and charge 100x the price.
+  def self.listed_forced_currency?(currency)
+    normalized = currency.to_s.downcase
+    FORCED_CURRENCY_PAYMENT_METHODS.value?(normalized) &&
+      StripeChargeProcessor.listed_amount_matches_charge_units?(normalized)
   end
 
   # Whether this registry method may charge live-mode checkouts for this seller. Test
@@ -589,9 +612,9 @@ class Checkout::BuyerCurrencyEligibility
       return fallback(:unsupported_settlement_currency)
     end
 
-    # Defensive guard for future registry entries: Gumroad and Stripe must agree
-    # on the currency's minor units before we can charge in it (EUR always
-    # passes; this protects against someone adding e.g. a KRW-forced method).
+    # Gumroad and Stripe must agree on the currency's minor units before we can charge
+    # in it. The second guard is what keeps a KRW-priced cart off this lane: its listed
+    # cents are 1/100 won, which the direct-listed case would forward as whole won.
     return fallback(:unsupported_forced_currency) unless StripeChargeProcessor.charge_minor_units_compatible?(forced_currency)
     if priced_in_forced_currency && !StripeChargeProcessor.listed_amount_matches_charge_units?(forced_currency)
       return fallback(:unsupported_forced_currency)

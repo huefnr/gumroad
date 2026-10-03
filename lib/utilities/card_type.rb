@@ -38,4 +38,20 @@ class CardType
   # through their own Alipay balance or linked funding source, so — like the methods above — it
   # produces no credit card statement line and has to be recorded here to stay queryable.
   ALIPAY = "alipay"
+  # South Korean methods offered through the same Payment Element. KR_CARD is recorded by
+  # method like the wallets: Stripe reports it as its own payment method type with a local
+  # issuer brand, not as a "card" on one of the networks above.
+  KR_CARD = "kr_card"
+  KAKAO_PAY = "kakao_pay"
+  NAVER_PAY = "naver_pay"
+  SAMSUNG_PAY = "samsung_pay"
+  PAYCO = "payco"
+  # Unlike "upi" or "pix", these identifiers do not read as a name once upcased.
+  SOUTH_KOREAN_METHOD_LABELS = {
+    KR_CARD => "Korean card",
+    KAKAO_PAY => "Kakao Pay",
+    NAVER_PAY => "Naver Pay",
+    SAMSUNG_PAY => "Samsung Pay",
+    PAYCO => "PAYCO",
+  }.freeze
 end

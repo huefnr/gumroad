@@ -2024,8 +2024,164 @@ describe Checkout::StripePaymentPresenter do
       expect(issued[:payment_method_types]).to include("cashapp")
       expect(issued[:quoted_payment_method_types]).to eq(issued[:payment_method_types] - %w[cashapp])
       expect(issued[:inr_payment_method_types]).to be_nil
+      expect(issued[:krw_payment_method_types]).to be_nil
     ensure
       deactivate_buyer_currency_flags(seller) if seller
+    end
+
+    describe "South Korean methods on a KRW remount" do
+      let(:south_korean_methods) { %w[kr_card kakao_pay naver_pay samsung_pay payco] }
+
+      def capture_issued_list_token
+        issued = {}
+        allow(Checkout::PaymentMethodListToken).to receive(:issue) do |**kwargs|
+          issued.replace(kwargs)
+          "issued:#{kwargs[:payment_method_types].join(",")}" if kwargs[:payment_method_types].present?
+        end
+        issued
+      end
+
+      it "advertises and signs only the launched methods for a South Korean buyer on a USD-priced product" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "usd", price_cents: 1999)
+        activate_buyer_currency_flags(seller)
+        Feature.activate_user(:checkout_local_method_kakao_pay, seller)
+        Feature.activate_user(:checkout_local_method_naver_pay, seller)
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.40", "South Korea")
+        issued = capture_issued_list_token
+
+        props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.40")
+
+        # The Element first mounts in USD, where a KRW-only method would reject the whole session.
+        expect(props[:elements_options][:currency]).to eq("usd")
+        expect(props[:elements_options][:payment_method_types]).to eq(%w[card link])
+        expect(props[:elements_options][:krw_local_methods]).to eq(%w[kakao_pay naver_pay])
+        expect(props[:elements_options][:inr_local_methods]).to eq([])
+        expect(props[:disable_wallets]).to be(true)
+        expect(issued[:payment_method_types]).to eq(%w[card link])
+        expect(issued[:quoted_payment_method_types]).to eq(%w[card link])
+        expect(issued[:krw_payment_method_types]).to eq(%w[card link kakao_pay naver_pay])
+        expect(issued[:inr_payment_method_types]).to be_nil
+      ensure
+        if seller
+          Feature.deactivate_user(:checkout_local_method_kakao_pay, seller)
+          Feature.deactivate_user(:checkout_local_method_naver_pay, seller)
+          deactivate_buyer_currency_flags(seller)
+        end
+      end
+
+      it "advertises every South Korean method in Stripe test mode without any launch flag" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "usd", price_cents: 1999)
+        activate_buyer_currency_flags(seller)
+        allow(Stripe).to receive(:api_key).and_return("sk_test_currency")
+        stub_geoip_country("203.0.113.41", "South Korea")
+
+        props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.41")
+
+        expect(props[:elements_options][:krw_local_methods]).to eq(south_korean_methods)
+      ensure
+        deactivate_buyer_currency_flags(seller) if seller
+      end
+
+      it "sends no krw_local_methods key while no South Korean method is launched" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "usd", price_cents: 1999)
+        activate_buyer_currency_flags(seller)
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.42", "South Korea")
+        issued = capture_issued_list_token
+
+        props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.42")
+
+        expect(props[:elements_options]).not_to have_key(:krw_local_methods)
+        expect(issued[:krw_payment_method_types]).to be_nil
+      ensure
+        deactivate_buyer_currency_flags(seller) if seller
+      end
+
+      it "withholds launched methods from a buyer outside South Korea" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "usd", price_cents: 1999)
+        activate_buyer_currency_flags(seller)
+        south_korean_methods.each { Feature.activate_user(:"checkout_local_method_#{_1}", seller) }
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.43", "Japan")
+        issued = capture_issued_list_token
+
+        props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.43")
+
+        expect(props[:elements_options]).not_to have_key(:krw_local_methods)
+        expect(issued[:krw_payment_method_types]).to be_nil
+      ensure
+        if seller
+          south_korean_methods.each { Feature.deactivate_user(:"checkout_local_method_#{_1}", seller) }
+          deactivate_buyer_currency_flags(seller)
+        end
+      end
+
+      it "withholds launched methods when the seller hid local-currency display" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "usd", price_cents: 1999)
+        seller.update!(disable_buyer_local_currency: true)
+        activate_buyer_currency_flags(seller)
+        Feature.activate_user(:checkout_local_method_kakao_pay, seller)
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.44", "South Korea")
+
+        props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.44")
+
+        expect(props[:elements_options][:currency]).to eq("usd")
+        expect(props[:elements_options]).not_to have_key(:krw_local_methods)
+      ensure
+        if seller
+          Feature.deactivate_user(:checkout_local_method_kakao_pay, seller)
+          deactivate_buyer_currency_flags(seller)
+        end
+      end
+
+      it "withholds launched methods from a membership, which they cannot re-bill" do
+        seller = create(:user, disable_buyer_local_currency: false)
+        product = create(:membership_product, user: seller, price_cents: 1999)
+        Feature.activate_user(described_class::STRIPE_PAYMENT_ELEMENT_CHECKOUT_FEATURE_NAME, seller)
+        Feature.activate_user(described_class::STRIPE_PAYMENT_ELEMENT_CLIENT_CONFIRM_FEATURE_NAME, seller)
+        activate_buyer_currency_flags(seller)
+        Feature.activate_user(:checkout_local_method_kakao_pay, seller)
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.45", "South Korea")
+
+        props = stripe_payment_props(
+          add_products: [checkout_product_for(product, price: 1999, recurrence: BasePrice::Recurrence::MONTHLY)],
+          ip: "203.0.113.45"
+        )
+
+        expect(props.dig(:elements_options, :krw_local_methods)).to be_nil
+        expect(Array(props.dig(:elements_options, :payment_method_types))).not_to include("kakao_pay")
+      ensure
+        if seller
+          Feature.deactivate_user(:checkout_local_method_kakao_pay, seller)
+          deactivate_buyer_currency_flags(seller)
+        end
+      end
+
+      # Gumroad stores KRW prices in 1/100 won and Stripe charges whole won, so a listed KRW
+      # Element would mount — and charge — 100 times the price.
+      it "never mounts a listed KRW Element for a KRW-priced product, launched methods or not" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "krw", price_cents: 1_500_000)
+        activate_buyer_currency_flags(seller)
+        south_korean_methods.each { Feature.activate_user(:"checkout_local_method_#{_1}", seller) }
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.46", "South Korea")
+
+        props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.46")
+
+        expect(props.dig(:elements_options, :currency)).not_to eq("krw")
+        expect(props.dig(:elements_options, :presentment_amount_cents)).to be_nil
+        expect(props.dig(:elements_options, :listed_currency_display)).to be_nil
+        expect(Array(props.dig(:elements_options, :payment_method_types))).not_to include(*south_korean_methods)
+        expect(props.dig(:elements_options, :krw_local_methods)).to be_nil
+      ensure
+        if seller
+          south_korean_methods.each { Feature.deactivate_user(:"checkout_local_method_#{_1}", seller) }
+          deactivate_buyer_currency_flags(seller)
+        end
+      end
     end
 
     it "mounts card + UPI for the flagged single paid-upfront INR membership slice" do

@@ -3906,6 +3906,87 @@ describe Order::PreparePaymentIntentService, :vcr do
       end
     end
 
+    context "with a South Korean payment method" do
+      let(:seller) { create(:user, check_merchant_account_is_linked: true, disable_buyer_local_currency: false) }
+      let(:product) { create(:product, user: seller, price_cents: 19_99) }
+      let!(:connect_account) { create(:merchant_account_stripe_connect, user: seller) }
+
+      before do
+        connect_account.update!(stripe_capabilities_snapshot: {
+                                  "capabilities" => { "link_payments" => "active", "kakao_pay_payments" => "active" },
+                                  "refreshed_at" => Time.current.iso8601,
+                                })
+        Feature.activate_user(:buyer_local_currency, seller)
+        Feature.activate_user(Checkout::BuyerCurrencyEligibility::FEATURE_NAME, seller)
+        allow(Stripe).to receive(:api_key).and_return("sk_test_currency")
+      end
+
+      after do
+        Feature.deactivate_user(:buyer_local_currency, seller)
+        Feature.deactivate_user(Checkout::BuyerCurrencyEligibility::FEATURE_NAME, seller)
+      end
+
+      def perform_with_kakao_pay_preview(order, params)
+        preview = Stripe::StripeObject.construct_from(type: "kakao_pay", kakao_pay: {}, card: nil)
+        allow(Stripe::ConfirmationToken).to receive(:retrieve)
+          .and_return(Stripe::StripeObject.construct_from(payment_method_preview: preview))
+
+        charge_intent = instance_double(StripeChargeIntent, id: "pi_kakao_pay", client_secret: "pi_kakao_pay_secret")
+        create_args = nil
+        allow(StripeDeferredPaymentIntent).to receive(:create) do |**kwargs|
+          create_args = kwargs
+          charge_intent
+        end
+
+        responses = described_class.new(order:, params:, confirmation_token: "ctoken_kakao_pay").perform
+        [create_args, responses]
+      end
+
+      it "rejects the token when the server-owned buyer country is outside South Korea" do
+        order, params = build_order
+        order.purchases.each { _1.update!(ip_country: "United States") }
+
+        create_args, responses = perform_with_kakao_pay_preview(order, params)
+
+        expect(create_args).to be_nil
+        expect(responses["unique-id-0"][:success]).to eq(false)
+        expect(order.charges).to be_empty
+        expect(order.purchases.first.reload).to be_failed
+      end
+
+      # The method is only ever offered on a quoted KRW remount. Minting a fresh quote here would
+      # charge a rate the Element never showed — including for a client that reports no mount
+      # currency, which is the case the mount comparison alone would let through.
+      it "fails closed when selected without the displayed quote" do
+        order, params = build_order
+        order.purchases.each { _1.update!(ip_country: "South Korea") }
+        expect(StripeFxQuote).not_to receive(:create)
+
+        create_args, responses = perform_with_kakao_pay_preview(order, params)
+
+        expect(create_args).to be_nil
+        expect(responses["unique-id-0"][:success]).to eq(false)
+        expect(order.purchases.first.reload).to be_failed
+      end
+
+      context "on a KRW-priced product" do
+        let(:product) { create(:product, user: seller, price_currency_type: Currency::KRW, price_cents: 1_500_000) }
+
+        # 1_500_000 stored cents are 15,000 won; forwarded verbatim they would charge 1,500,000 won.
+        it "fails closed instead of charging the listed cents as whole won" do
+          order, params = build_order
+          order.purchases.each { _1.update!(ip_country: "South Korea") }
+          expect(StripeFxQuote).not_to receive(:create)
+
+          create_args, responses = perform_with_kakao_pay_preview(order, params)
+
+          expect(create_args).to be_nil
+          expect(responses["unique-id-0"][:success]).to eq(false)
+          expect(order.purchases.first.reload).to be_failed
+        end
+      end
+    end
+
     context "when a purchase matches no line item in params" do
       # A bundle child (or any purchase whose permalink/variant is absent from params) must not be
       # keyed under nil, which silently drops its response and collides across purchases.
