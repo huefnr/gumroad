@@ -98,7 +98,7 @@ describe Checkout::StripePaymentPresenter do
         # summary to render that currency. Defaults to the forced currency at the standard 1/100
         # minor-unit scale, which covers EUR/BRL/INR; pass it explicitly for anything else.
         listed_currency_display: listed_currency_display ||
-          (currency == "usd" ? nil : { currency:, subunit_to_unit: 100 }),
+          (currency == "usd" ? nil : { currency:, subunit_to_unit: 100, charge_subunit_to_unit: 100 }),
         payment_method_types:,
         inr_local_methods:,
         # The presenter signs the list it mounted, so the fixture pins the post-strip list: a
@@ -2160,27 +2160,49 @@ describe Checkout::StripePaymentPresenter do
         end
       end
 
-      # Gumroad stores KRW prices in 1/100 won and Stripe charges whole won, so a listed KRW
-      # Element would mount — and charge — 100 times the price.
-      it "never mounts a listed KRW Element for a KRW-priced product, launched methods or not" do
+      # Gumroad stores KRW prices in 1/100 won and Stripe charges whole won. The listed lane
+      # rescales every amount, so a KRW-priced product mounts a KRW Element at the won price
+      # with the launched South Korean methods on it, in the pinned order.
+      it "mounts a listed KRW Element in whole won with the launched methods for a KRW-priced product" do
         seller, product = buyer_currency_seller_with_product(price_currency_type: "krw", price_cents: 1_500_000)
         activate_buyer_currency_flags(seller)
-        south_korean_methods.each { Feature.activate_user(:"checkout_local_method_#{_1}", seller) }
+        Feature.activate_user(:checkout_local_method_kakao_pay, seller)
+        Feature.activate_user(:checkout_local_method_naver_pay, seller)
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.46", "South Korea")
+        issued = capture_issued_list_token
+
+        props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.46")
+
+        expect(props.dig(:elements_options, :currency)).to eq("krw")
+        expect(props.dig(:elements_options, :presentment_amount_cents)).to eq(15_000)
+        expect(props.dig(:elements_options, :listed_currency_display)).to eq(currency: "krw", subunit_to_unit: 100, charge_subunit_to_unit: 1)
+        expect(props.dig(:elements_options, :payment_method_types)).to match_array(%w[card link kakao_pay naver_pay])
+        expect(props.dig(:elements_options, :krw_local_methods)).to match_array(%w[kakao_pay naver_pay])
+        expect(issued[:krw_payment_method_types]).to match_array(%w[card link kakao_pay naver_pay])
+        expect(props[:disable_wallets]).to be(true)
+      ensure
+        if seller
+          Feature.deactivate_user(:checkout_local_method_kakao_pay, seller)
+          Feature.deactivate_user(:checkout_local_method_naver_pay, seller)
+          deactivate_buyer_currency_flags(seller)
+        end
+      end
+
+      it "keeps a KRW-priced product on the canonical USD Element while no South Korean method is launched" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "krw", price_cents: 1_500_000)
+        activate_buyer_currency_flags(seller)
         allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
         stub_geoip_country("203.0.113.46", "South Korea")
 
         props = stripe_payment_props(add_products: [checkout_product_for(product)], ip: "203.0.113.46")
 
-        expect(props.dig(:elements_options, :currency)).not_to eq("krw")
+        expect(props.dig(:elements_options, :currency)).to eq("usd")
         expect(props.dig(:elements_options, :presentment_amount_cents)).to be_nil
-        expect(props.dig(:elements_options, :listed_currency_display)).to be_nil
         expect(Array(props.dig(:elements_options, :payment_method_types))).not_to include(*south_korean_methods)
         expect(props.dig(:elements_options, :krw_local_methods)).to be_nil
       ensure
-        if seller
-          south_korean_methods.each { Feature.deactivate_user(:"checkout_local_method_#{_1}", seller) }
-          deactivate_buyer_currency_flags(seller)
-        end
+        deactivate_buyer_currency_flags(seller) if seller
       end
     end
 
@@ -2596,7 +2618,7 @@ describe Checkout::StripePaymentPresenter do
       expect(props[:elements_options][:presentment_amount_cents]).to eq(3000)
       # The multi-item forced-currency lane charges the listed prices directly too, so the cart
       # summary must render in EUR rather than an FX-converted USD figure.
-      expect(props[:elements_options][:listed_currency_display]).to eq(currency: "eur", subunit_to_unit: 100)
+      expect(props[:elements_options][:listed_currency_display]).to eq(currency: "eur", subunit_to_unit: 100, charge_subunit_to_unit: 100)
       expect(props[:elements_options][:direct_listed_currency_rate]).to eq(0.8)
     ensure
       deactivate_buyer_currency_flags(seller) if seller
@@ -2696,7 +2718,7 @@ describe Checkout::StripePaymentPresenter do
       expect(props[:elements_options][:presentment_amount_cents]).to eq(499_000)
       # Same currency as the element mount and the charge, carrying the backend's own minor-unit
       # scale so the browser never has to guess how to denominate it.
-      expect(props[:elements_options][:listed_currency_display]).to eq(currency: "inr", subunit_to_unit: 100)
+      expect(props[:elements_options][:listed_currency_display]).to eq(currency: "inr", subunit_to_unit: 100, charge_subunit_to_unit: 100)
     ensure
       if seller
         Feature.deactivate_user(:checkout_local_method_upi, seller)

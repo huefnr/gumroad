@@ -90,6 +90,37 @@ describe Charge::DirectListedPresentment do
     expect(second.reload.purchase_presentment.presentment_total_cents).to eq(25_00)
   end
 
+  # Gumroad stores KRW in 1/100 won and Stripe charges whole won: every component is rescaled
+  # before it is summed or persisted, so the rows hold charge units like the quoted lane's.
+  it "rescales a KRW cart's stored cents to whole won before persisting" do
+    purchase.update!(link: create(:product, user: seller, price_currency_type: Currency::KRW, price_cents: 1_500_000),
+                     displayed_price_cents: 1_500_000,
+                     displayed_price_currency_type: Currency::KRW,
+                     rate_converted_to_usd: "1388.9",
+                     price_cents: 10_80,
+                     tax_cents: 1_00,
+                     was_tax_excluded_from_price: true,
+                     gumroad_tax_cents: 0,
+                     shipping_cents: 0,
+                     total_transaction_cents: 11_80)
+    charge.update!(amount_cents: 11_80, gumroad_amount_cents: 1_50)
+    allow_any_instance_of(described_class).to receive(:get_rate).and_raise("live rate used")
+
+    rescaled = described_class.new(charge:,
+                                   purchases: [purchase],
+                                   gumroad_amount_cents: 1_50,
+                                   currency: Currency::KRW).perform
+
+    # ₩15,000 listed, plus $1.00 of tax at 1,388.9 won per dollar: 138_890 stored cents are 1,389 won.
+    expect(rescaled).to have_attributes(presentment_total_cents: 16_389,
+                                        presentment_currency: Currency::KRW,
+                                        presentment_gumroad_amount_cents: 2_083)
+    expect(purchase.reload.purchase_presentment).to have_attributes(presentment_currency: Currency::KRW,
+                                                                    presentment_price_cents: 15_000,
+                                                                    presentment_seller_tax_cents: 1_389,
+                                                                    presentment_total_cents: 16_389)
+  end
+
   it "caps the converted Gumroad amount at the purchase total" do
     charge.update!(amount_cents: 18_75, gumroad_amount_cents: 18_76)
     purchase.update!(tax_cents: 0,

@@ -137,6 +137,22 @@ describe StripeChargeProcessor, :vcr do
       expect(described_class.listed_amount_matches_charge_units?("jpy")).to be(true)
     end
 
+    # The listed lanes charge KRW only after rescaling the stored 1/100-won cents to whole won.
+    it "rescales listed KRW cents to whole won and admits KRW to the listed lanes" do
+      expect(described_class.charge_amount_from_money_subunits(1_500_000, "krw")).to eq(15_000)
+      expect(described_class.charge_amount_from_money_subunits(16_650, "krw")).to eq(167)
+      expect(described_class.money_subunits_from_charge_amount(15_000, "krw")).to eq(1_500_000)
+      expect(described_class.charge_amount_from_money_subunits(12_50, "cad")).to eq(12_50)
+      expect(described_class.charge_amount_from_money_subunits(1_500, "jpy")).to eq(1_500)
+
+      expect(described_class.listed_amount_chargeable?("krw")).to be(true)
+      expect(described_class.listed_amount_chargeable?("cad")).to be(true)
+      expect(described_class.listed_amount_chargeable?("jpy")).to be(true)
+      # Still verbatim-only: a TWD amount that is not a multiple of 100 is rejected by Stripe.
+      expect(described_class.listed_amount_chargeable?("twd")).to be(false)
+      expect(described_class.listed_amount_chargeable?(nil)).to be(false)
+    end
+
     it "rejects blank currencies" do
       expect(described_class.charge_minor_units_compatible?(nil)).to be(false)
       expect(described_class.charge_minor_units_compatible?("")).to be(false)

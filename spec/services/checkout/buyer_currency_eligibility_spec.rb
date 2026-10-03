@@ -423,7 +423,9 @@ describe Checkout::BuyerCurrencyEligibility do
     expect(decision.direct_listed_amount?).to eq(true)
   end
 
-  it "falls back from the listed lane when listed storage units differ from Stripe charge units" do
+  # KRW is stored in 1/100 won and charged in whole won; the listed lane rescales rather than
+  # forwarding the stored cents, so a KRW-priced product takes it like a CAD-priced one.
+  it "takes the listed lane for a KRW-priced product, whose stored cents the lane rescales" do
     Feature.activate_user(described_class::LISTED_CURRENCY_DIRECT_CHARGE_FEATURE_NAME, seller)
     allow_any_instance_of(described_class).to receive(:buyer_currency_for_ip).and_return(Currency::KRW)
     report_listed_currency_element(params, Currency::KRW)
@@ -431,8 +433,9 @@ describe Checkout::BuyerCurrencyEligibility do
                      displayed_price_currency_type: Currency::KRW,
                      rate_converted_to_usd: "0.00072")
 
-    expect(decision).not_to be_eligible
-    expect(decision.fallback_reason).to eq(:listed_currency_is_buyer_currency)
+    expect(decision).to be_eligible
+    expect(decision.currency).to eq(Currency::KRW)
+    expect(decision.direct_listed_amount?).to eq(true)
   end
 
   it "falls back from the listed lane for a currency Stripe only charges in multiples of 100" do
@@ -868,8 +871,9 @@ describe Checkout::BuyerCurrencyEligibility do
       end
     end
 
-    # Listed KRW cents are 1/100 won; the direct-listed case would forward them as whole won.
-    it "withholds a South Korean method from a KRW-priced product instead of charging its listed cents" do
+    # Listed KRW cents are 1/100 won; the direct-listed case rescales them to whole won
+    # (Charge::DirectListedPresentment) instead of forwarding them.
+    it "offers a South Korean method on a KRW-priced product through the direct-listed case" do
       purchase.update!(link: create(:product, user: seller, price_currency_type: Currency::KRW, price_cents: 1_500_000))
 
       decision = described_class.new(order:,
@@ -881,8 +885,9 @@ describe Checkout::BuyerCurrencyEligibility do
                                      setup_future_charges:,
                                      off_session:).method_forced_decision(payment_method: "kakao_pay")
 
-      expect(decision).not_to be_eligible
-      expect(decision.fallback_reason).to eq(:unsupported_forced_currency)
+      expect(decision).to be_eligible
+      expect(decision.currency).to eq(Currency::KRW)
+      expect(decision.direct_listed_amount?).to eq(true)
     end
 
     it "does not depend on GeoIP buyer currency detection" do
@@ -1300,9 +1305,9 @@ describe Checkout::BuyerCurrencyEligibility do
       expect(described_class.listed_forced_currency?("EUR")).to be(true)
     end
 
-    it "is false for KRW, which the registry forces but Gumroad stores in 1/100 won" do
+    it "is true for KRW, whose stored 1/100 won the listed lane rescales to whole won" do
       expect(described_class.forced_currency_for("kakao_pay")).to eq(Currency::KRW)
-      expect(described_class.listed_forced_currency?(Currency::KRW)).to be(false)
+      expect(described_class.listed_forced_currency?(Currency::KRW)).to be(true)
     end
 
     it "is false for a currency no registry method forces" do

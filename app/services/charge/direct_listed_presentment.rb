@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+# Presentment for a cart charged at its listed prices (no FX quote). Every amount is rescaled
+# from Gumroad storage cents into Stripe charge units before it is summed or persisted, so the
+# rows hold charge units like the quoted lane's do. The rescale is the identity for every
+# listed currency except KRW (1/100 won stored, whole won charged); see
+# StripeChargeProcessor.listed_amount_chargeable?.
 class Charge::DirectListedPresentment
   include CurrencyHelper
 
@@ -62,20 +67,25 @@ class Charge::DirectListedPresentment
       # one that produced those USD figures (the whole point of reusing the stored rate).
       raise "rate_converted_to_usd must be set for direct-listed-amount presentment (purchase #{purchase.id})" if rate.blank?
 
-      tip_cents = purchase.tip&.value_cents.to_i
-      seller_tax_cents = usd_cents_to_currency(currency, purchase.tax_cents.to_i, rate)
-      gumroad_tax_cents = usd_cents_to_currency(currency, purchase.gumroad_tax_cents.to_i, rate)
-      shipping_cents = usd_cents_to_currency(currency, purchase.shipping_cents.to_i, rate)
-
+      listed_tip_cents = purchase.tip&.value_cents.to_i
       # displayed_price_cents already includes the tip (the buyer's chosen add-on is
       # folded into the display total at purchase-creation time), which is why tip is
       # subtracted below without ever having been added. If that invariant breaks (e.g.
       # a future purchase type stores the tip separately), the subtraction would
       # silently clamp price to 0 — raise early so the caller can apply its own safe
       # failure contract.
-      raise "displayed_price_cents must include tip (purchase #{purchase.id}: tip #{tip_cents} > displayed #{purchase.displayed_price_cents})" if tip_cents > purchase.displayed_price_cents
+      raise "displayed_price_cents must include tip (purchase #{purchase.id}: tip #{listed_tip_cents} > displayed #{purchase.displayed_price_cents})" if listed_tip_cents > purchase.displayed_price_cents
 
-      presentment_total_cents = purchase.displayed_price_cents +
+      # Rescale the listed price and the tip separately, in the same split the surcharge
+      # allocations sign (listed_price_cents, listed_tip_cents), so prepare's component
+      # comparison cannot drift by a rounding unit on a KRW cart.
+      listed_price_cents = charge_units(purchase.displayed_price_cents - listed_tip_cents)
+      tip_cents = charge_units(listed_tip_cents)
+      seller_tax_cents = charge_units(usd_cents_to_currency(currency, purchase.tax_cents.to_i, rate))
+      gumroad_tax_cents = charge_units(usd_cents_to_currency(currency, purchase.gumroad_tax_cents.to_i, rate))
+      shipping_cents = charge_units(usd_cents_to_currency(currency, purchase.shipping_cents.to_i, rate))
+
+      presentment_total_cents = listed_price_cents + tip_cents +
                                 (purchase.was_tax_excluded_from_price ? seller_tax_cents : 0) +
                                 gumroad_tax_cents + shipping_cents
       # Mirror Charge::PresentmentAllocator's canonical decomposition: price is what
@@ -85,7 +95,7 @@ class Charge::DirectListedPresentment
       # adverse double-rounding (e.g. a ~100% Gumroad cut) could put it a cent above the
       # purchase total and fail PurchasePresentment's gumroad-amount validation. Cap it
       # at the total.
-      presentment_gumroad_amount_cents = [usd_cents_to_currency(currency, canonical_gumroad_amount_cents_for(purchase), rate), presentment_total_cents].min
+      presentment_gumroad_amount_cents = [charge_units(usd_cents_to_currency(currency, canonical_gumroad_amount_cents_for(purchase), rate)), presentment_total_cents].min
 
       Charge::PresentmentAllocator::Allocation.new(
         purchase:,
@@ -103,5 +113,9 @@ class Charge::DirectListedPresentment
       return gumroad_amount_cents if purchases.one?
 
       purchase.total_transaction_amount_for_gumroad_cents
+    end
+
+    def charge_units(storage_cents)
+      StripeChargeProcessor.charge_amount_from_money_subunits(storage_cents, currency)
     end
 end
