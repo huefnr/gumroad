@@ -2160,6 +2160,29 @@ describe Checkout::StripePaymentPresenter do
         end
       end
 
+      it "withholds Korean methods when a second USD product is added from the same seller" do
+        seller, product = buyer_currency_seller_with_product(price_currency_type: "usd", price_cents: 1999)
+        other_product = create(:product, user: seller, price_currency_type: Currency::USD, price_cents: 2500)
+        activate_buyer_currency_flags(seller)
+        south_korean_methods.each { Feature.activate_user(:"checkout_local_method_#{_1}", seller) }
+        allow(Stripe).to receive(:api_key).and_return("sk_live_currency")
+        stub_geoip_country("203.0.113.47", "South Korea")
+        issued = capture_issued_list_token
+
+        props = stripe_payment_props(
+          add_products: [checkout_product_for(product), checkout_product_for(other_product)], ip: "203.0.113.47"
+        )
+
+        expect(props.dig(:elements_options, :krw_local_methods)).to be_nil
+        expect(Array(props.dig(:elements_options, :payment_method_types))).not_to include(*south_korean_methods)
+        expect(issued[:krw_payment_method_types]).to be_nil
+      ensure
+        if seller
+          south_korean_methods.each { Feature.deactivate_user(:"checkout_local_method_#{_1}", seller) }
+          deactivate_buyer_currency_flags(seller)
+        end
+      end
+
       # Gumroad stores KRW prices in 1/100 won and Stripe charges whole won, so a listed KRW
       # Element would mount — and charge — 100 times the price.
       it "never mounts a listed KRW Element for a KRW-priced product, launched methods or not" do

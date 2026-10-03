@@ -142,6 +142,7 @@ class CustomerPresenter
           (Pundit.policy!(pundit_user, [:audience, purchase]).undo_revoke_access? || nil) :
           (Pundit.policy!(pundit_user, [:audience, purchase]).revoke_access? ? false : nil),
       paypal_refund_expired: purchase.paypal_refund_expired?,
+      refund_unavailable_reason: purchase.refund_unavailable_reason,
       refunded: purchase.stripe_refunded?,
       partially_refunded: purchase.stripe_partially_refunded?,
       chargedback: purchase.chargedback? && !purchase.chargeback_reversed? && !purchase.stripe_refunded?,
@@ -182,6 +183,7 @@ class CustomerPresenter
       is_upgrade_purchase: purchase.is_upgrade_purchase?,
       chargedback: purchase.chargedback? && !purchase.chargeback_reversed? && !purchase.stripe_refunded?,
       paypal_refund_expired: purchase.paypal_refund_expired?,
+      refund_unavailable_reason: purchase.refund_unavailable_reason,
     }
   end
 

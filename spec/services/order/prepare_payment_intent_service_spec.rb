@@ -3942,6 +3942,64 @@ describe Order::PreparePaymentIntentService, :vcr do
         [create_args, responses]
       end
 
+      context "with a signed KRW quote and method list" do
+        let(:quote) do
+          Checkout::BuyerCurrencyQuote.create(
+            line_items: [Checkout::BuyerCurrencyQuote::LineItem.new(
+              uid: line_item[:uid], line_index: 0, permalink: product.unique_permalink,
+              product:, price_cents: product.price_cents, tip_cents: 0,
+              seller_tax_cents: 0, gumroad_tax_cents: 0, shipping_cents: 0
+            )],
+            canonical_total_cents: product.price_cents, ip: "0.0.0.0", currency: Currency::KRW
+          )
+        end
+
+        before do
+          connect_account.update!(stripe_capabilities_snapshot: {
+                                    "capabilities" => (%w[link] + CardType::SOUTH_KOREAN_METHOD_LABELS.keys).to_h { ["#{_1}_payments", "active"] },
+                                    "refreshed_at" => Time.current.iso8601,
+                                  })
+          allow(StripeFxQuote).to receive(:create).and_return(
+            StripeFxQuote::Quote.new(id: "fxq_korea", expires_at: 30.minutes.from_now, fx_rate: BigDecimal("0.0007272727"))
+          )
+        end
+
+        CardType::SOUTH_KOREAN_METHOD_LABELS.each_key do |method|
+          it "prepares #{method} for the exact displayed whole-won amount and pinned FX quote" do
+            expect(quote).to be_present
+            order, params = build_order
+            order.purchases.each { _1.update!(ip_country: "South Korea") }
+            methods = %w[card link] + CardType::SOUTH_KOREAN_METHOD_LABELS.keys
+            params = params.merge(
+              buyer_currency_quote: quote.token,
+              payment_element_mount_currency: Currency::KRW,
+              payment_method_list_token: Checkout::PaymentMethodListToken.issue(
+                payment_method_types: %w[card link], sellers: [seller], krw_payment_method_types: methods
+              ),
+            )
+            preview = Stripe::StripeObject.construct_from(type: method, method => {}, card: nil)
+            allow(Stripe::ConfirmationToken).to receive(:retrieve)
+              .and_return(Stripe::StripeObject.construct_from(payment_method_preview: preview))
+            expect(StripeFxQuote).not_to receive(:create)
+            expect(StripeDeferredPaymentIntent).to receive(:create).with(hash_including(
+              currency: Currency::KRW, amount_cents: 27_499, stripe_fx_quote_id: "fxq_korea",
+              payment_method_types: methods, merchant_account: connect_account
+            )).and_return(instance_double(StripeChargeIntent, id: "pi_korea", client_secret: "pi_korea_secret"))
+
+            responses = described_class.new(order:, params:, confirmation_token: "ctoken_korea").perform
+
+            expect(responses["unique-id-0"][:success]).to eq(true), responses.inspect
+            expect(quote.charge_presentment_total_cents).to eq(27_499)
+            expect(order.charges.last.charge_presentment).to have_attributes(
+              presentment_currency: Currency::KRW, presentment_total_cents: 27_499, stripe_fx_quote_id: "fxq_korea"
+            )
+            expect(order.purchases.first.reload.purchase_presentment).to have_attributes(
+              presentment_currency: Currency::KRW, presentment_total_cents: 27_499
+            )
+          end
+        end
+      end
+
       it "rejects the token when the server-owned buyer country is outside South Korea" do
         order, params = build_order
         order.purchases.each { _1.update!(ip_country: "United States") }
