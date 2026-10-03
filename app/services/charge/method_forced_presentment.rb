@@ -306,7 +306,9 @@ class Charge::MethodForcedPresentment
 
     def displayed_quote_required?(currency)
       return true if payment_method_type.to_s.downcase == "upi"
-      # Only ever offered on a quoted KRW remount, so there is always a displayed quote to honor.
+      # On a USD-priced cart these are only ever offered on a quoted KRW remount, so there is
+      # always a displayed quote to honor. A KRW-priced cart takes the direct-listed case above
+      # and never reaches this method.
       return true if payment_method_type.to_s.downcase.in?(Checkout::PaymentMethodResolver::KR_LOCKED_PAYMENT_METHOD_TYPES)
 
       mount = params[:payment_element_mount_currency].to_s.downcase

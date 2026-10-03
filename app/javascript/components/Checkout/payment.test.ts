@@ -1293,6 +1293,44 @@ describe("direct-listed card element", () => {
     expect(getStripePaymentElementMountCurrency(s)).toBe("cad");
   });
 
+  // KRW is stored in 1/100 won and charged in whole won. Line prices are storage cents, so the
+  // Element must wait for the server's rescaled allocations rather than sum them itself.
+  it("waits for rescaled allocations on a KRW Element instead of summing stored listed cents", () => {
+    const krwConfig: CheckoutPaymentConfig = {
+      ...methodForcedEurConfig,
+      elements_options: {
+        ...methodForcedEurConfig.elements_options,
+        currency: "krw",
+        presentment_amount_cents: 15_000,
+        listed_currency_display: { currency: "krw", subunit_to_unit: 100, charge_subunit_to_unit: 1 },
+        payment_method_types: ["card", "kakao_pay"],
+      },
+    };
+    const krwState = () =>
+      state({
+        checkoutPayment: krwConfig,
+        products: [product({ listedPriceCents: 1_500_000 })],
+        surcharges: loadedSurcharges({ subtotal: 1_080 }),
+      });
+
+    expect(getStripePaymentElementAmount(krwState())).toBeNull();
+
+    const withAllocations = krwState();
+    if (withAllocations.surcharges.type !== "loaded") throw new Error("Expected loaded surcharges");
+    withAllocations.surcharges.result.direct_listed_line_allocations = [
+      {
+        permalink: "product-a",
+        price_cents: 15_000,
+        tip_cents: 0,
+        tax_cents: 0,
+        shipping_cents: 0,
+        total_cents: 15_000,
+      },
+    ];
+    expect(getStripePaymentElementAmount(withAllocations)).toBe(15_000);
+    expect(getStripePaymentElementMountCurrency(withAllocations)).toBe("krw");
+  });
+
   it("mounts with the canonical amount when the buyer selects USD", () => {
     const s = state({ checkoutPayment: directListedCardConfig, buyerCurrency: "usd" });
 

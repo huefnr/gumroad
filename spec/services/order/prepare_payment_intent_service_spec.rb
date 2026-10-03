@@ -3972,11 +3972,52 @@ describe Order::PreparePaymentIntentService, :vcr do
       context "on a KRW-priced product" do
         let(:product) { create(:product, user: seller, price_currency_type: Currency::KRW, price_cents: 1_500_000) }
 
-        # 1_500_000 stored cents are 15,000 won; forwarded verbatim they would charge 1,500,000 won.
-        it "fails closed instead of charging the listed cents as whole won" do
+        # 1_500_000 stored cents are 15,000 won. The listed lane rescales them, so the intent is
+        # created for 15,000 KRW at the listed price with no FX quote, never for the stored cents
+        # as whole won.
+        it "prepares a 15,000 won intent at the listed price with no FX quote" do
           order, params = build_order
           order.purchases.each { _1.update!(ip_country: "South Korea") }
+          params[:payment_details_source] = PurchasePaymentFlow::PAYMENT_ELEMENT
+          params[:payment_element_mount_currency] = Currency::KRW
           expect(StripeFxQuote).not_to receive(:create)
+
+          create_args, responses = perform_with_kakao_pay_preview(order, params)
+
+          expect(responses["unique-id-0"][:success]).to eq(true)
+          expect(create_args[:currency]).to eq(Currency::KRW)
+          expect(create_args[:amount_cents]).to eq(15_000)
+          expect(create_args[:stripe_fx_quote_id]).to be_nil
+          expect(create_args[:payment_method_types]).to include("kakao_pay")
+
+          purchase = order.purchases.first.reload
+          expect(purchase.displayed_price_cents).to eq(1_500_000)
+          expect(order.charges.last.charge_presentment).to have_attributes(presentment_currency: Currency::KRW,
+                                                                           presentment_total_cents: 15_000,
+                                                                           stripe_fx_quote_id: nil,
+                                                                           fx_rate: nil)
+          expect(purchase.purchase_presentment).to have_attributes(presentment_currency: Currency::KRW,
+                                                                   presentment_price_cents: 15_000,
+                                                                   presentment_total_cents: 15_000)
+        end
+
+        it "rejects a signed allocation that still carries the stored cents instead of whole won" do
+          order, params = build_order
+          order.purchases.each { _1.update!(ip_country: "South Korea") }
+          params[:payment_details_source] = PurchasePaymentFlow::PAYMENT_ELEMENT
+          params[:payment_element_mount_currency] = Currency::KRW
+          params[:direct_listed_amount_token] = Checkout::DirectListedAmountToken.issue(
+            allocations: [{
+              permalink: product.unique_permalink,
+              price_cents: 1_500_000,
+              tip_cents: 0,
+              tax_cents: 0,
+              shipping_cents: 0,
+              total_cents: 1_500_000,
+            }],
+            sellers: [seller],
+            currency: Currency::KRW
+          )
 
           create_args, responses = perform_with_kakao_pay_preview(order, params)
 

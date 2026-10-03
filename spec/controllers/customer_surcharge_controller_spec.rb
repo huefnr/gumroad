@@ -378,6 +378,44 @@ describe CustomerSurchargeController, :vcr do
       expect(Time.iso8601(response.parsed_body.fetch("direct_listed_amount_token_expires_at"))).to be_within(2.seconds).of(Checkout::DirectListedAmountToken::TTL.from_now)
     end
 
+    # KRW is stored in 1/100 won and charged in whole won; the allocations and their signed
+    # snapshot carry the rescaled won amounts prepare will compare against.
+    it "rescales KRW method-forced allocations from stored cents to whole won" do
+      Feature.activate_user(Checkout::BuyerCurrencyEligibility::FEATURE_NAME, @user)
+      product = create(:product, user: @user, price_currency_type: Currency::KRW, price_cents: 1_500_000)
+      allow_any_instance_of(CurrencyHelper).to receive(:get_rate).with(Currency::KRW).and_return("1388.9")
+      tax_result = double(
+        business_vat_status: nil,
+        to_hash: { has_vat_id_input: false },
+        tax_cents: 1_00,
+        price_cents: 10_80,
+        zip_tax_rate: nil,
+        used_taxjar: true,
+        gumroad_is_mpf: true
+      )
+      allow(SalesTaxCalculator).to receive(:new).and_return(instance_double(SalesTaxCalculator, calculate: tax_result))
+
+      post "calculate_all", params: {
+        products: [{ permalink: product.unique_permalink, price: 10_80, listed_price_cents: 1_500_000, quantity: 1 }],
+        country: "KR",
+        payment_details_source: PurchasePaymentFlow::PAYMENT_ELEMENT,
+        payment_element_mount_currency: Currency::KRW,
+        payment_element_direct_listed_currency: Currency::KRW,
+        payment_method_list_token: listed_payment_method_list_token(product, rate: "1388.9"),
+      }, as: :json
+
+      allocation = response.parsed_body.fetch("direct_listed_line_allocations").sole
+      # ₩15,000 listed plus $1.00 of tax at 1,388.9 won per dollar, each rescaled on its own.
+      expect(allocation).to include("price_cents" => 15_000, "tip_cents" => 0, "tax_cents" => 1_389, "shipping_cents" => 0, "total_cents" => 16_389)
+      expect(
+        Checkout::DirectListedAmountToken.verify(
+          response.parsed_body.fetch("direct_listed_amount_token"),
+          sellers: [@user],
+          currency: Currency::KRW
+        )
+      ).to eq([allocation])
+    end
+
     it "returns method-forced allocations without the listed-card ramp" do
       Feature.activate_user(Checkout::BuyerCurrencyEligibility::FEATURE_NAME, @user)
       first_product = create(:product, user: @user, price_currency_type: Currency::EUR, price_cents: 100)

@@ -281,9 +281,7 @@ class Checkout::StripePaymentPresenter
       end
       quote_remount = client_confirm_quote_remount?
       inr_local_method_types = (quote_remount || listed_currency) ? inr_local_methods : []
-      # No listed_currency arm: a KRW-priced cart never mounts a listed Element (see
-      # Checkout::BuyerCurrencyEligibility.listed_forced_currency?).
-      krw_local_method_types = quote_remount ? krw_local_methods : []
+      krw_local_method_types = (quote_remount || listed_currency) ? krw_local_methods : []
       # Never list a forced-currency method on an element that is not mounted in that
       # currency — Stripe rejects the whole session, card included. UPI for a USD-priced
       # cart is added only after the browser remounts in INR (inr_local_methods), and the
@@ -307,10 +305,13 @@ class Checkout::StripePaymentPresenter
         stripe_elements_mode: STRIPE_ELEMENTS_MODE_FOR_PAYMENT_INTENT,
         currency: element_currency,
         buyer_currency_presentment: quote_remount,
-        presentment_amount_cents: listed_currency ? listed_element_amount_cents : nil,
+        presentment_amount_cents: listed_currency ? listed_element_amount_cents(element_currency) : nil,
         listed_currency_display: listed_currency ? {
           currency: element_currency,
           subunit_to_unit: subunit_to_unit(element_currency),
+          # Stripe's scale for the Element amount above. Differs from subunit_to_unit only for
+          # KRW, where the browser must wait for server allocations rather than sum listed cents.
+          charge_subunit_to_unit: StripeChargeProcessor.charge_subunit_to_unit(element_currency),
         } : nil,
         payment_method_types:,
         inr_local_methods: inr_local_method_types,
@@ -467,8 +468,8 @@ class Checkout::StripePaymentPresenter
       local_remount_method_resolution(Currency::INR)
     end
 
-    # The South Korean methods take the same route as UPI above, and it is their only one: a
-    # USD-priced cart whose Element the surcharge quote remounted in KRW.
+    # The South Korean methods take the same routes as UPI above: a USD-priced cart whose
+    # Element the surcharge quote remounted in KRW, or a KRW-priced cart on the listed lane.
     def krw_local_methods
       return [] unless sellers.one?
       return [] unless buyer_country == Checkout::PaymentMethodResolver::KR_ALPHA2
@@ -550,7 +551,7 @@ class Checkout::StripePaymentPresenter
       buyer_currency = buyer_currency_for_ip(ip).to_s.downcase
       return false if buyer_currency.blank? || buyer_currency == Currency::USD
       return false unless StripeChargeProcessor.charge_minor_units_compatible?(buyer_currency)
-      return false unless StripeChargeProcessor.listed_amount_matches_charge_units?(buyer_currency)
+      return false unless StripeChargeProcessor.listed_amount_chargeable?(buyer_currency)
 
       items.all? { _1[:product_currency] == buyer_currency } &&
         listed_lane_rates_uniform?(items)
@@ -586,8 +587,17 @@ class Checkout::StripePaymentPresenter
     # amount from each purchase's displayed_price_cents, which is already quantity-inclusive,
     # so summing per-unit prices would mount the Element with a smaller amount than the
     # PaymentIntent it confirms against — Stripe rejects that mismatch.
-    def listed_element_amount_cents
-      items.sum { _1[:price_cents].to_i * (_1[:quantity] || 1).to_i }
+    #
+    # Rescaled per line into Stripe's charge units, the way the surcharge allocations and
+    # Charge::DirectListedPresentment rescale each purchase: 1_500_000 stored KRW cents mount
+    # as 15,000 won. Identity for every other listed currency.
+    def listed_element_amount_cents(currency)
+      items.sum do |item|
+        StripeChargeProcessor.charge_amount_from_money_subunits(
+          item[:price_cents].to_i * (item[:quantity] || 1).to_i,
+          currency
+        )
+      end
     end
 
     def uniform_method_forced_currency(items)

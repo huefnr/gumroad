@@ -69,6 +69,9 @@ export type ListedCurrencyDisplayConfig = {
   // The backend's authoritative minor-unit scale for the currency, so formatting never relies on
   // the currencies.json single_unit heuristic.
   subunit_to_unit: number;
+  // Stripe's scale for the Element amount. Differs from subunit_to_unit only for KRW (prices are
+  // stored in 1/100 won, charged in whole won). Optional for responses from servers that predate it.
+  charge_subunit_to_unit?: number;
 };
 export type PaymentElementClientConfirmConfig = {
   stripe_elements_mode: typeof STRIPE_ELEMENTS_MODE_FOR_PAYMENT_INTENT;
@@ -937,6 +940,14 @@ function getDirectListedPaymentElementAmount(state: State) {
   // per-line allocations (see loadSurcharges); until they arrive, mount nothing rather than an
   // amount the deferred intent will not match.
   if (taxUsd !== 0 || shippingUsd !== 0) return null;
+  // Listed line prices are storage cents. When Stripe charges on a coarser scale (KRW), only the
+  // server's rescaled allocations can mount; summing storage cents here would mount 100x.
+  const listedCurrency = state.checkoutPayment.elements_options.listed_currency_display;
+  if (
+    listedCurrency?.charge_subunit_to_unit != null &&
+    listedCurrency.charge_subunit_to_unit !== listedCurrency.subunit_to_unit
+  )
+    return null;
 
   const linePrices = getListedLinePrices(state);
   const lineTotal = linePrices.reduce<number>((sum, line) => sum + line.price, 0);

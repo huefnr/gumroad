@@ -150,6 +150,29 @@ class StripeChargeProcessor
     charge_subunit_to_unit(normalized) == subunit_to_unit(normalized)
   end
 
+  # Whether a listed price can be charged on the listed lanes at all: verbatim when the two
+  # scales agree, or rescaled when Gumroad stores finer units than Stripe charges. That is only
+  # KRW today (1/100 won stored, whole won charged); every amount boundary on those lanes runs
+  # the stored cents through .charge_amount_from_money_subunits first. Multiples-of-100
+  # currencies stay out: their problem is what Stripe accepts, not the scale.
+  def self.listed_amount_chargeable?(currency)
+    return false if currency.blank?
+
+    normalized = currency.to_s.downcase
+    listed_amount_matches_charge_units?(normalized) || normalized == Currency::KRW
+  end
+
+  # Inverse of .money_subunits_from_charge_amount: Gumroad storage cents to the amount Stripe
+  # charges, rounded to the nearest charge unit. Identity whenever the two scales agree.
+  def self.charge_amount_from_money_subunits(amount_cents, currency)
+    amount = amount_cents.to_i
+    gumroad_sub = subunit_to_unit(currency)
+    charge_sub = charge_subunit_to_unit(currency)
+    return amount if gumroad_sub == charge_sub || !gumroad_sub.positive?
+
+    (BigDecimal(amount) * charge_sub / gumroad_sub).round
+  end
+
   def self.align_charge_amount_cents(amount_cents, currency)
     amount = amount_cents.to_i
     return amount unless AMOUNT_DIVISIBLE_BY_100_CURRENCIES.include?(currency.to_s.downcase)

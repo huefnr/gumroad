@@ -45,10 +45,11 @@ class Checkout::BuyerCurrencyEligibility
     # intents — creating one in any other currency is rejected outright ("Payments with pix
     # support the following currencies: brl", verified against our live platform account).
     "pix" => Currency::BRL,
-    # Stripe accepts the South Korean methods on KRW intents only, and KRW is the one registry
+    # Stripe accepts the South Korean methods on KRW intents only. KRW is the one registry
     # currency Gumroad stores on a different scale than Stripe charges (1/100 won vs whole
-    # won). A KRW-priced cart therefore never mounts a method-forced Element (see
-    # .listed_forced_currency?); these are reachable only through a quoted KRW remount.
+    # won), so a KRW-priced cart reaches them through the listed lane only after every amount
+    # is rescaled (StripeChargeProcessor.charge_amount_from_money_subunits); a USD-priced cart
+    # reaches them through a quoted KRW remount.
     "kr_card" => Currency::KRW,
     "kakao_pay" => Currency::KRW,
     "naver_pay" => Currency::KRW,
@@ -88,13 +89,13 @@ class Checkout::BuyerCurrencyEligibility
     FORCED_CURRENCY_PAYMENT_METHODS[payment_method.to_s.downcase]
   end
 
-  # Whether a cart priced uniformly in `currency` may mount a method-forced Element. That
-  # lane forwards the listed cents verbatim, so a registry currency whose storage scale
-  # differs from Stripe's would mount and charge 100x the price.
+  # Whether a cart priced uniformly in `currency` may mount a method-forced Element. The
+  # lane charges the listed cents, so the currency's storage scale must either match Stripe's
+  # or be one the lane rescales at every amount boundary (KRW).
   def self.listed_forced_currency?(currency)
     normalized = currency.to_s.downcase
     FORCED_CURRENCY_PAYMENT_METHODS.value?(normalized) &&
-      StripeChargeProcessor.listed_amount_matches_charge_units?(normalized)
+      StripeChargeProcessor.listed_amount_chargeable?(normalized)
   end
 
   # Whether this registry method may charge live-mode checkouts for this seller. Test
@@ -178,7 +179,7 @@ class Checkout::BuyerCurrencyEligibility
     currency = buyer_currency.to_s.downcase
     return false if currency.blank? || currency == Currency::USD
     return false unless StripeChargeProcessor.charge_minor_units_compatible?(currency)
-    return false unless StripeChargeProcessor.listed_amount_matches_charge_units?(currency)
+    return false unless StripeChargeProcessor.listed_amount_chargeable?(currency)
     return false if line_items.any? { _1.product.blank? }
     return false unless line_items.all? { _1.product.price_currency_type.to_s.downcase == currency }
 
@@ -493,7 +494,7 @@ class Checkout::BuyerCurrencyEligibility
         purchases.all? { _1.seller_id == seller.id } &&
         !multi_seller_order? &&
         self.class.listed_currency_direct_charge_enabled?(seller) &&
-        StripeChargeProcessor.listed_amount_matches_charge_units?(buyer_currency) &&
+        StripeChargeProcessor.listed_amount_chargeable?(buyer_currency) &&
         listed_currency_displayed?(buyer_currency) &&
         purchases.none? { Purchase::FixLaterChargePresentmentService.kind_for(_1).present? } &&
         purchases.none? { _1.shipping_cents.to_i.positive? } &&
@@ -613,10 +614,11 @@ class Checkout::BuyerCurrencyEligibility
     end
 
     # Gumroad and Stripe must agree on the currency's minor units before we can charge
-    # in it. The second guard is what keeps a KRW-priced cart off this lane: its listed
-    # cents are 1/100 won, which the direct-listed case would forward as whole won.
+    # in it. The second guard keeps the direct-listed case to currencies whose stored cents
+    # the lane can charge: verbatim, or rescaled for KRW (1/100 won stored, whole won
+    # charged) by Charge::DirectListedPresentment.
     return fallback(:unsupported_forced_currency) unless StripeChargeProcessor.charge_minor_units_compatible?(forced_currency)
-    if priced_in_forced_currency && !StripeChargeProcessor.listed_amount_matches_charge_units?(forced_currency)
+    if priced_in_forced_currency && !StripeChargeProcessor.listed_amount_chargeable?(forced_currency)
       return fallback(:unsupported_forced_currency)
     end
 

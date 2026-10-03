@@ -233,15 +233,20 @@ class CustomerSurchargeController < ApplicationController
       rate = signed_direct_listed_rate(currency)
       return nil if rate.blank?
 
+      # Each component is rescaled from storage cents into Stripe charge units on its own,
+      # exactly as Charge::DirectListedPresentment does at prepare, so the signed snapshot and
+      # prepare's allocations agree unit for unit. Identity for every currency but KRW.
       allocations = line_items.map do |line_item|
         item = products[line_item.line_index]
         listed_price_cents = numeric_cents(item[:listed_price_cents])
         listed_tip_cents = numeric_cents(item[:listed_tip_cents]) || 0
         return nil if listed_price_cents.nil?
 
-        tax_cents = usd_cents_to_currency(currency, line_item.charge_seller_tax_cents.to_i, rate) +
-          usd_cents_to_currency(currency, line_item.charge_gumroad_tax_cents.to_i, rate)
-        shipping_cents = usd_cents_to_currency(currency, line_item.charge_shipping_cents.to_i, rate)
+        listed_price_cents = StripeChargeProcessor.charge_amount_from_money_subunits(listed_price_cents, currency)
+        listed_tip_cents = StripeChargeProcessor.charge_amount_from_money_subunits(listed_tip_cents, currency)
+        tax_cents = StripeChargeProcessor.charge_amount_from_money_subunits(usd_cents_to_currency(currency, line_item.charge_seller_tax_cents.to_i, rate), currency) +
+          StripeChargeProcessor.charge_amount_from_money_subunits(usd_cents_to_currency(currency, line_item.charge_gumroad_tax_cents.to_i, rate), currency)
+        shipping_cents = StripeChargeProcessor.charge_amount_from_money_subunits(usd_cents_to_currency(currency, line_item.charge_shipping_cents.to_i, rate), currency)
         total_cents = listed_price_cents + listed_tip_cents + tax_cents + shipping_cents
         {
           permalink: line_item.permalink.to_s,
